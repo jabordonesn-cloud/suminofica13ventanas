@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Lock, User, Eye, EyeOff, UserPlus, X, Store } from 'lucide-react';
+import { Lock, User, Eye, EyeOff, UserPlus, X, Store, Shield, UserCircle } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import type { UserRole } from '@/types/auth';
 
 export default function Login() {
   const { login, register } = useAuth();
@@ -15,6 +16,7 @@ export default function Login() {
   const [showRegister, setShowRegister] = useState(false);
   const [regUsername, setRegUsername] = useState('');
   const [regPassword, setRegPassword] = useState('');
+  const [regRole, setRegRole] = useState<UserRole>('cajero');
   const [regError, setRegError] = useState('');
 
   const handleLogin = (e: React.FormEvent) => {
@@ -31,12 +33,20 @@ export default function Login() {
   const handleRegister = (e: React.FormEvent) => {
     e.preventDefault();
     setRegError('');
-    const result = register(regUsername, regPassword);
+    const result = register(regUsername, regPassword, regRole);
     if (result.success) {
       navigate('/inventario');
     } else {
       setRegError(result.error || 'Error al registrar');
     }
+  };
+
+  const closeRegister = () => {
+    setShowRegister(false);
+    setRegError('');
+    setRegUsername('');
+    setRegPassword('');
+    setRegRole('cajero');
   };
 
   return (
@@ -118,7 +128,7 @@ export default function Login() {
               className="w-full flex items-center justify-center gap-2 text-gold-500 hover:text-gold-600 font-medium text-sm transition-colors"
             >
               <UserPlus className="w-4 h-4" />
-              Nuevo Usuario
+              Crear Nuevo Usuario
             </button>
           </div>
 
@@ -136,12 +146,7 @@ export default function Login() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md relative">
             <button
-              onClick={() => {
-                setShowRegister(false);
-                setRegError('');
-                setRegUsername('');
-                setRegPassword('');
-              }}
+              onClick={closeRegister}
               className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 transition-colors"
             >
               <X className="w-5 h-5" />
@@ -156,7 +161,7 @@ export default function Login() {
 
             <form onSubmit={handleRegister} className="space-y-5">
               <div>
-                <label className="block text-sm font-medium text-gray-600 mb-2">Usuario</label>
+                <label className="block text-sm font-medium text-gray-600 mb-2">Nombre de Usuario</label>
                 <div className="relative">
                   <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gold-400" />
                   <input
@@ -185,15 +190,64 @@ export default function Login() {
                 </div>
               </div>
 
+              <div>
+                <label className="block text-sm font-medium text-gray-600 mb-2">Rol</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <label
+                    className={`flex items-center gap-3 px-4 py-3 border rounded-lg cursor-pointer transition-all
+                      ${regRole === 'admin'
+                        ? 'border-gold-400 bg-gold-50 ring-2 ring-gold-400/30'
+                        : 'border-gray-200 hover:border-gold-300'
+                      }`}
+                  >
+                    <Shield className={`w-5 h-5 ${regRole === 'admin' ? 'text-gold-500' : 'text-gray-400'}`} />
+                    <div>
+                      <p className="text-sm font-medium text-gray-700">Administrador</p>
+                      <p className="text-xs text-gray-400">Acceso total</p>
+                    </div>
+                    <input
+                      type="radio"
+                      name="role"
+                      value="admin"
+                      checked={regRole === 'admin'}
+                      onChange={() => setRegRole('admin')}
+                      className="sr-only"
+                    />
+                  </label>
+                  <label
+                    className={`flex items-center gap-3 px-4 py-3 border rounded-lg cursor-pointer transition-all
+                      ${regRole === 'cajero'
+                        ? 'border-gold-400 bg-gold-50 ring-2 ring-gold-400/30'
+                        : 'border-gray-200 hover:border-gold-300'
+                      }`}
+                  >
+                    <UserCircle className={`w-5 h-5 ${regRole === 'cajero' ? 'text-gold-500' : 'text-gray-400'}`} />
+                    <div>
+                      <p className="text-sm font-medium text-gray-700">Cajero</p>
+                      <p className="text-xs text-gray-400">Acceso restringido</p>
+                    </div>
+                    <input
+                      type="radio"
+                      name="role"
+                      value="cajero"
+                      checked={regRole === 'cajero'}
+                      onChange={() => setRegRole('cajero')}
+                      className="sr-only"
+                    />
+                  </label>
+                </div>
+                <p className="text-xs text-gray-400 mt-2">
+                  {regRole === 'admin'
+                    ? 'Acceso a las 13 ventanas del sistema.'
+                    : 'Sin acceso a Contabilidad, Pagos, Deuda ni Balance.'}
+                </p>
+              </div>
+
               {regError && (
                 <div className="bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg px-4 py-3">
                   {regError}
                 </div>
               )}
-
-              <div className="bg-gold-50 rounded-lg p-3 text-xs text-gray-500">
-                Los nuevos usuarios se registran con rol <span className="font-semibold text-gold-500">Cajero</span> (acceso restringido).
-              </div>
 
               <button
                 type="submit"

@@ -4,7 +4,7 @@ import type { AuthUser, UserRole } from '@/types/auth';
 interface AuthContextValue {
   user: AuthUser | null;
   login: (username: string, password: string) => { success: boolean; error?: string };
-  register: (username: string, password: string) => { success: boolean; error?: string };
+  register: (username: string, password: string, role: UserRole) => { success: boolean; error?: string };
   logout: () => void;
 }
 
@@ -65,7 +65,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return { success: true };
   };
 
-  const register = (username: string, password: string): { success: boolean; error?: string } => {
+  const register = (
+    username: string,
+    password: string,
+    role: UserRole,
+  ): { success: boolean; error?: string } => {
     if (username.trim().length < 3) {
       return { success: false, error: 'El usuario debe tener al menos 3 caracteres' };
     }
@@ -77,10 +81,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (exists) {
       return { success: false, error: 'Este usuario ya existe' };
     }
-    const newUser: StoredUser = { username, password, role: 'cajero' };
+    const newUser: StoredUser = { username, password, role };
     users.push(newUser);
     saveStoredUsers(users);
-    const authUser: AuthUser = { username, role: 'cajero' };
+    const authUser: AuthUser = { username, role };
     setUser(authUser);
     localStorage.setItem('erp_current_user', JSON.stringify(authUser));
     return { success: true };
