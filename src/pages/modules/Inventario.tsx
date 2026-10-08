@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Package,
   Upload,
@@ -7,7 +7,11 @@ import {
   Trash2,
   X,
   AlertTriangle,
+  FileSpreadsheet,
+  CheckCircle2,
+  Loader2,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { useStore } from '@/context/StoreContext';
 import type { Product } from '@/types/product';
 
@@ -15,6 +19,86 @@ function safeNum(v: string | number, fallback = 0): number {
   const n = typeof v === 'number' ? v : parseFloat(v);
   return isNaN(n) ? fallback : n;
 }
+
+/* ── Excel header detection helpers ── */
+
+const HEADER_KEYWORDS = {
+  name: ['descripcion', 'descripción', 'nombre', 'producto', 'description', 'articulo', 'artículo'],
+  cost: ['costo', 'cost', 'precio compra', 'preciocompra', 'purchase price', 'precio de compra'],
+  stock: ['existencia', 'existencias', 'cantidad', 'stock', 'inventory', 'cant', 'inventario'],
+  barcode: ['codigo', 'código', 'barcode', 'cod', 'codigo de barras', 'código de barras', 'sku'],
+  gain: ['ganancia', '% ganancia', '% de ganancia', 'ganancia %', 'margen', 'margin', 'gain', 'profit %', 'utilidad'],
+};
+
+function normalizeStr(s: unknown): string {
+  return String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function findHeaderCol(
+  row: Record<string, unknown>,
+  keys: string[],
+): string | null {
+  const rowKeys = Object.keys(row);
+  for (const key of keys) {
+    const found = rowKeys.find((rk) => normalizeStr(rk) === key);
+    if (found) return found;
+  }
+  for (const key of keys) {
+    const found = rowKeys.find((rk) => normalizeStr(rk).includes(key));
+    if (found) return found;
+  }
+  return null;
+}
+
+function findHeaderRow(
+  rows: Record<string, unknown>[],
+): { headerRow: Record<string, unknown>; startIndex: number } | null {
+  for (let i = 0; i < Math.min(rows.length, 15); i++) {
+    const row = rows[i];
+    const nameCol = findHeaderCol(row, HEADER_KEYWORDS.name);
+    const costCol = findHeaderCol(row, HEADER_KEYWORDS.cost);
+    const stockCol = findHeaderCol(row, HEADER_KEYWORDS.stock);
+    const found = [nameCol, costCol, stockCol].filter(Boolean).length;
+    if (found >= 2) {
+      return { headerRow: row, startIndex: i + 1 };
+    }
+  }
+  return null;
+}
+
+function parseExcelRows(rows: Record<string, unknown>[]): Omit<Product, 'id'>[] {
+  const headerInfo = findHeaderRow(rows);
+  if (!headerInfo) {
+    // Fallback: assume first row is headers
+    if (rows.length < 2) return [];
+  }
+
+  const { headerRow, startIndex } = headerInfo ?? { headerRow: rows[0], startIndex: 1 };
+
+  const nameCol = findHeaderCol(headerRow, HEADER_KEYWORDS.name);
+  const costCol = findHeaderCol(headerRow, HEADER_KEYWORDS.cost);
+  const stockCol = findHeaderCol(headerRow, HEADER_KEYWORDS.stock);
+  const barcodeCol = findHeaderCol(headerRow, HEADER_KEYWORDS.barcode);
+  const gainCol = findHeaderCol(headerRow, HEADER_KEYWORDS.gain);
+
+  const result: Omit<Product, 'id'>[] = [];
+  for (let i = startIndex; i < rows.length; i++) {
+    const row = rows[i];
+    const name = nameCol ? String(row[nameCol] ?? '').trim() : '';
+    if (!name) continue;
+
+    result.push({
+      barcode: barcodeCol ? String(row[barcodeCol] ?? '').trim() : '',
+      name,
+      stock: stockCol ? safeNum(row[stockCol] as string | number) : 0,
+      priceBuy: costCol ? safeNum(row[costCol] as string | number) : 0,
+      gainPct: gainCol ? safeNum(row[gainCol] as string | number) : 30,
+    });
+  }
+  return result;
+}
+
+
 
 export default function Inventario() {
   const {
@@ -24,13 +108,15 @@ export default function Inventario() {
     setTasaPts,
     products,
     addProduct,
+    addManyProducts,
     updateProduct,
     deleteProduct,
   } = useStore();
 
   const [search, setSearch] = useState('');
-  const [showImport, setShowImport] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [importStatus, setImportStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
+  const [importCount, setImportCount] = useState(0);
 
   // New product form state
   const [newBarcode, setNewBarcode] = useState('');
@@ -40,13 +126,17 @@ export default function Inventario() {
   const [newGainPct, setNewGainPct] = useState('');
 
   const searchRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Sort: low stock (<=5) first, then by name
+  /* ── Sort: stock <= 5 floats to top, then alphabetical ── */
   const sortedProducts = useMemo(() => {
     const filtered = products.filter((p) => {
       if (!search.trim()) return true;
       const q = search.toLowerCase();
-      return p.barcode.toLowerCase().includes(q) || p.name.toLowerCase().includes(q);
+      return (
+        p.barcode.toLowerCase().includes(q) ||
+        p.name.toLowerCase().includes(q)
+      );
     });
     return [...filtered].sort((a, b) => {
       const aLow = a.stock <= 5 ? 0 : 1;
@@ -56,12 +146,23 @@ export default function Inventario() {
     });
   }, [products, search]);
 
+  /* ── Auto-focus search after import or add ── */
+  useEffect(() => {
+    if (importStatus === 'done') {
+      const timer = setTimeout(() => setImportStatus('idle'), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [importStatus]);
+
+  /* ── Quick add via scanner ── */
   const handleQuickAdd = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== 'Enter') return;
     const q = search.trim();
     if (!q) return;
     const existing = products.find(
-      (p) => p.barcode.toLowerCase() === q.toLowerCase() || p.name.toLowerCase() === q.toLowerCase(),
+      (p) =>
+        p.barcode.toLowerCase() === q.toLowerCase() ||
+        p.name.toLowerCase() === q.toLowerCase(),
     );
     if (existing) {
       updateProduct(existing.id, { stock: existing.stock + 1 });
@@ -73,14 +174,56 @@ export default function Inventario() {
     setSearch('');
   };
 
+  /* ── Excel/CSV file handler ── */
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setImportStatus('loading');
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: 'array' });
+      const sheetName = wb.SheetNames[0];
+      const sheet = wb.Sheets[sheetName];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const rows: Record<string, any>[] = XLSX.utils.sheet_to_json(sheet, {
+        raw: true,
+        defval: '',
+      });
+
+      if (rows.length === 0) {
+        setImportStatus('error');
+        return;
+      }
+
+      const parsed = parseExcelRows(rows);
+      if (parsed.length === 0) {
+        setImportStatus('error');
+        return;
+      }
+
+      addManyProducts(parsed);
+      setImportCount(parsed.length);
+      setImportStatus('done');
+    } catch {
+      setImportStatus('error');
+    }
+
+    // Reset file input so the same file can be re-selected
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  /* ── Add product form ── */
   const handleAddProduct = (e: React.FormEvent) => {
     e.preventDefault();
     addProduct({
-      barcode: newBarcode.trim() || `GEN${Date.now()}`,
+      barcode: newBarcode.trim(),
       name: newName.trim() || 'Producto sin nombre',
       stock: safeNum(newStock),
       priceBuy: safeNum(newPriceBuy),
-      gainPct: safeNum(newGainPct),
+      gainPct: safeNum(newGainPct) || 30,
     });
     setNewBarcode('');
     setNewName('');
@@ -89,6 +232,16 @@ export default function Inventario() {
     setNewGainPct('');
     setShowAdd(false);
     searchRef.current?.focus();
+  };
+
+  /* ── Calculations per row ── */
+  const calcRow = (p: Product) => {
+    const buy = safeNum(p.priceBuy);
+    const gain = safeNum(p.gainPct);
+    const priceSell = buy + buy * (gain / 100);
+    const priceBs = priceSell * safeNum(tasaBs, 1);
+    const pricePts = priceBs * safeNum(tasaPts, 1);
+    return { priceSell, priceBs, pricePts };
   };
 
   return (
@@ -104,7 +257,7 @@ export default function Inventario() {
       {/* Top controls: rates + import + scanner */}
       <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-4 mb-4">
         <div className="flex flex-col lg:flex-row gap-4 lg:items-end">
-          {/* Rates */}
+          {/* Rates - top left */}
           <div className="flex gap-3">
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Tasa Bs</label>
@@ -130,15 +283,41 @@ export default function Inventario() {
 
           <div className="flex-1" />
 
-          {/* Import button */}
+          {/* Load Excel/CSV button */}
           <button
-            onClick={() => setShowImport(true)}
-            className="flex items-center gap-2 px-4 py-2 border border-gold-300 text-gold-500 rounded-lg text-sm font-medium hover:bg-gold-50 transition-colors whitespace-nowrap"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={importStatus === 'loading'}
+            className="flex items-center gap-2 px-4 py-2 bg-gold-400 hover:bg-gold-500 text-white rounded-lg text-sm font-semibold transition-all shadow-gold-sm whitespace-nowrap disabled:opacity-50"
           >
-            <Upload className="w-4 h-4" />
-            Importar Excel/PDF
+            {importStatus === 'loading' ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <FileSpreadsheet className="w-4 h-4" />
+            )}
+            Cargar Inventario (Excel/CSV)
           </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx, .xls, .csv"
+            onChange={handleFileChange}
+            className="hidden"
+          />
         </div>
+
+        {/* Import status toast */}
+        {importStatus === 'done' && (
+          <div className="mt-3 flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm rounded-lg px-4 py-2.5">
+            <CheckCircle2 className="w-4 h-4" />
+            Se importaron <strong>{importCount}</strong> productos correctamente.
+          </div>
+        )}
+        {importStatus === 'error' && (
+          <div className="mt-3 flex items-center gap-2 bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg px-4 py-2.5">
+            <AlertTriangle className="w-4 h-4" />
+            No se pudieron leer los datos. Verifique que el archivo tenga columnas "Descripción", "Costo" y "Existencia".
+          </div>
+        )}
 
         {/* Scanner / Search */}
         <div className="mt-3 relative">
@@ -164,30 +343,26 @@ export default function Inventario() {
             <thead>
               <tr className="bg-gold-50 text-gray-600 text-xs uppercase tracking-wider">
                 <th className="text-left px-4 py-3 font-semibold">Código de Barras</th>
-                <th className="text-left px-4 py-3 font-semibold">Nombre</th>
+                <th className="text-left px-4 py-3 font-semibold">Nombre del Producto</th>
                 <th className="text-center px-4 py-3 font-semibold">Existencia</th>
                 <th className="text-right px-4 py-3 font-semibold">Precio Compra</th>
                 <th className="text-center px-4 py-3 font-semibold">% Ganancia</th>
                 <th className="text-right px-4 py-3 font-semibold">Precio Venta</th>
-                <th className="text-right px-4 py-3 font-semibold text-gold-500">Precio en Bs</th>
-                <th className="text-right px-4 py-3 font-semibold text-emerald-600">Precio $$</th>
-                <th className="text-center px-4 py-3 font-semibold">Acciones</th>
+                <th className="text-right px-4 py-3 font-semibold text-blue-600">Precio en Bs</th>
+                <th className="text-right px-4 py-3 font-semibold text-green-700">Precio en $$</th>
+                <th className="text-center px-4 py-3 font-semibold"></th>
               </tr>
             </thead>
             <tbody>
               {sortedProducts.length === 0 && (
                 <tr>
                   <td colSpan={9} className="text-center py-12 text-gray-400">
-                    No hay productos. Use el escáner para agregar productos rápidamente.
+                    No hay productos. Use el escáner o cargue un archivo Excel/CSV para comenzar.
                   </td>
                 </tr>
               )}
               {sortedProducts.map((p) => {
-                const priceBuy = safeNum(p.priceBuy);
-                const gainPct = safeNum(p.gainPct);
-                const priceSell = priceBuy + priceBuy * (gainPct / 100);
-                const priceBs = priceSell * safeNum(tasaBs, 1);
-                const pricePts = priceBs * safeNum(tasaPts, 1);
+                const { priceSell, priceBs, pricePts } = calcRow(p);
                 const isLowStock = p.stock <= 5;
 
                 return (
@@ -195,49 +370,82 @@ export default function Inventario() {
                     key={p.id}
                     className={`border-t border-gray-50 transition-colors ${isLowStock ? 'bg-red-50' : 'hover:bg-gray-50/50'}`}
                   >
+                    {/* Código de Barras - editable */}
                     <td className="px-4 py-3">
-                      {isLowStock && (
-                        <AlertTriangle className="inline w-3.5 h-3.5 text-red-400 mr-1.5" />
-                      )}
-                      <span className="font-mono text-xs text-gray-600">{p.barcode}</span>
+                      <div className="flex items-center gap-1.5">
+                        {isLowStock && (
+                          <AlertTriangle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
+                        )}
+                        <input
+                          type="text"
+                          value={p.barcode}
+                          onChange={(e) => updateProduct(p.id, { barcode: e.target.value })}
+                          className="w-32 font-mono text-xs px-1 py-1 border border-transparent rounded hover:border-gray-200 focus:outline-none focus:ring-1 focus:ring-gold-400 focus:border-transparent bg-transparent"
+                        />
+                      </div>
                     </td>
-                    <td className="px-4 py-3 font-medium text-gray-700">{p.name}</td>
+
+                    {/* Nombre - editable */}
+                    <td className="px-4 py-3">
+                      <input
+                        type="text"
+                        value={p.name}
+                        onChange={(e) => updateProduct(p.id, { name: e.target.value })}
+                        className="w-full font-medium text-gray-700 px-1 py-1 border border-transparent rounded hover:border-gray-200 focus:outline-none focus:ring-1 focus:ring-gold-400 focus:border-transparent bg-transparent"
+                      />
+                    </td>
+
+                    {/* Existencia - editable */}
                     <td className="px-4 py-3 text-center">
                       <input
                         type="number"
                         value={p.stock}
                         onChange={(e) => updateProduct(p.id, { stock: safeNum(e.target.value) })}
                         className={`w-16 text-center px-1 py-1 border rounded text-sm focus:outline-none focus:ring-1 focus:ring-gold-400
-                          ${isLowStock ? 'border-red-300 text-red-600 font-semibold bg-red-50' : 'border-gray-200'}`}
+                          ${isLowStock
+                            ? 'border-red-300 text-red-600 font-bold bg-red-50'
+                            : 'border-transparent hover:border-gray-200 text-gray-700'}`}
                       />
                     </td>
+
+                    {/* Precio Compra - editable */}
                     <td className="px-4 py-3 text-right">
                       <input
                         type="number"
                         step="0.01"
                         value={p.priceBuy}
                         onChange={(e) => updateProduct(p.id, { priceBuy: safeNum(e.target.value) })}
-                        className="w-20 text-right px-2 py-1 border border-gray-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-gold-400"
+                        className="w-20 text-right px-2 py-1 border border-transparent rounded text-sm hover:border-gray-200 focus:outline-none focus:ring-1 focus:ring-gold-400 focus:border-transparent bg-transparent"
                       />
                     </td>
+
+                    {/* % Ganancia - editable */}
                     <td className="px-4 py-3 text-center">
                       <input
                         type="number"
                         step="0.01"
                         value={p.gainPct}
                         onChange={(e) => updateProduct(p.id, { gainPct: safeNum(e.target.value) })}
-                        className="w-16 text-center px-1 py-1 border border-gray-200 rounded text-sm focus:outline-none focus:ring-1 focus:ring-gold-400"
+                        className="w-16 text-center px-1 py-1 border border-transparent rounded text-sm hover:border-gray-200 focus:outline-none focus:ring-1 focus:ring-gold-400 focus:border-transparent bg-transparent"
                       />
                     </td>
+
+                    {/* Precio Venta - calculated */}
                     <td className="px-4 py-3 text-right font-semibold text-gray-800">
                       ${priceSell.toFixed(2)}
                     </td>
-                    <td className="px-4 py-3 text-right font-semibold text-gold-500">
+
+                    {/* Precio en Bs - calculated, blue */}
+                    <td className="px-4 py-3 text-right font-semibold text-blue-600">
                       Bs {priceBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
-                    <td className="px-4 py-3 text-right font-semibold text-emerald-600">
+
+                    {/* Precio en $$ - calculated, green */}
+                    <td className="px-4 py-3 text-right font-semibold text-green-700">
                       $$ {pricePts.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
+
+                    {/* Delete */}
                     <td className="px-4 py-3 text-center">
                       <button
                         onClick={() => deleteProduct(p.id)}
@@ -254,39 +462,6 @@ export default function Inventario() {
           </table>
         </div>
       </div>
-
-      {/* Import dialog (simulated) */}
-      {showImport && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md relative">
-            <button
-              onClick={() => setShowImport(false)}
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 bg-gold-400 rounded-lg flex items-center justify-center">
-                <Upload className="w-5 h-5 text-white" />
-              </div>
-              <h2 className="text-xl font-semibold text-gray-800">Importar Excel/PDF</h2>
-            </div>
-            <div className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center">
-              <Upload className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-              <p className="text-sm text-gray-500">
-                Arrastre su archivo aquí o haga clic para seleccionar
-              </p>
-              <p className="text-xs text-gray-400 mt-1">Formatos soportados: .xlsx, .csv, .pdf</p>
-            </div>
-            <button
-              onClick={() => setShowImport(false)}
-              className="mt-6 w-full bg-gold-400 hover:bg-gold-500 text-white font-semibold py-2.5 rounded-lg transition-all"
-            >
-              Cerrar
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Add product dialog */}
       {showAdd && (
@@ -318,11 +493,12 @@ export default function Inventario() {
                   type="text"
                   value={newBarcode}
                   onChange={(e) => setNewBarcode(e.target.value)}
+                  placeholder="Dejar en blanco para usar lector USB después"
                   className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Nombre</label>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Nombre del Producto</label>
                 <input
                   type="text"
                   value={newName}
@@ -358,6 +534,7 @@ export default function Inventario() {
                     step="0.01"
                     value={newGainPct}
                     onChange={(e) => setNewGainPct(e.target.value)}
+                    placeholder="30"
                     className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent"
                   />
                 </div>

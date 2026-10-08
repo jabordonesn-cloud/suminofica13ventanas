@@ -9,6 +9,7 @@ interface StoreContextValue {
 
   products: Product[];
   addProduct: (p: Omit<Product, 'id'>) => void;
+  addManyProducts: (items: Omit<Product, 'id'>[]) => void;
   updateProduct: (id: string, updates: Partial<Omit<Product, 'id'>>) => void;
   deleteProduct: (id: string) => void;
   reduceStock: (id: string, qty: number) => void;
@@ -77,6 +78,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     persistProducts([...products, { ...p, id: genId() }]);
   };
 
+  const addManyProducts = (items: Omit<Product, 'id'>[]) => {
+    const mapped = items.map((item) => ({ ...item, id: genId() }));
+    persistProducts([...products, ...mapped]);
+  };
+
   const updateProduct = (id: string, updates: Partial<Omit<Product, 'id'>>) => {
     persistProducts(products.map((p) => (p.id === id ? { ...p, ...updates } : p)));
   };
@@ -110,6 +116,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         setTasaPts,
         products,
         addProduct,
+        addManyProducts,
         updateProduct,
         deleteProduct,
         reduceStock,
