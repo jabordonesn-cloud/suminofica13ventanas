@@ -1,7 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import {
   Package,
-  Upload,
   ScanLine,
   Plus,
   Trash2,
@@ -11,18 +10,22 @@ import {
   CheckCircle2,
   Loader2,
 } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import readXlsxFile from 'read-excel-file/browser';
 import { useStore } from '@/context/StoreContext';
 import type { Product } from '@/types/product';
 
-function safeNum(v: string | number, fallback = 0): number {
-  const n = typeof v === 'number' ? v : parseFloat(v);
+function safeNum(v: unknown, fallback = 0): number {
+  if (v === null || v === undefined) return fallback;
+  const n = typeof v === 'number' ? v : parseFloat(String(v));
   return isNaN(n) ? fallback : n;
 }
 
-/* ── Excel header detection helpers ── */
+function normalizeStr(s: unknown): string {
+  return String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
 
-const HEADER_KEYWORDS = {
+/* ── Header keyword maps for intelligent detection ── */
+const KEYWORDS = {
   name: ['descripcion', 'descripción', 'nombre', 'producto', 'description', 'articulo', 'artículo'],
   cost: ['costo', 'cost', 'precio compra', 'preciocompra', 'purchase price', 'precio de compra'],
   stock: ['existencia', 'existencias', 'cantidad', 'stock', 'inventory', 'cant', 'inventario'],
@@ -30,75 +33,70 @@ const HEADER_KEYWORDS = {
   gain: ['ganancia', '% ganancia', '% de ganancia', 'ganancia %', 'margen', 'margin', 'gain', 'profit %', 'utilidad'],
 };
 
-function normalizeStr(s: unknown): string {
-  return String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
-}
+type CellValue = number | string | Date | null | undefined;
+type Sheet = CellValue[][];
 
-function findHeaderCol(
-  row: Record<string, unknown>,
+function findColIndex(
+  headerRow: CellValue[],
   keys: string[],
-): string | null {
-  const rowKeys = Object.keys(row);
-  for (const key of keys) {
-    const found = rowKeys.find((rk) => normalizeStr(rk) === key);
-    if (found) return found;
-  }
-  for (const key of keys) {
-    const found = rowKeys.find((rk) => normalizeStr(rk).includes(key));
-    if (found) return found;
-  }
-  return null;
-}
-
-function findHeaderRow(
-  rows: Record<string, unknown>[],
-): { headerRow: Record<string, unknown>; startIndex: number } | null {
-  for (let i = 0; i < Math.min(rows.length, 15); i++) {
-    const row = rows[i];
-    const nameCol = findHeaderCol(row, HEADER_KEYWORDS.name);
-    const costCol = findHeaderCol(row, HEADER_KEYWORDS.cost);
-    const stockCol = findHeaderCol(row, HEADER_KEYWORDS.stock);
-    const found = [nameCol, costCol, stockCol].filter(Boolean).length;
-    if (found >= 2) {
-      return { headerRow: row, startIndex: i + 1 };
+): number {
+  for (let i = 0; i < headerRow.length; i++) {
+    const h = normalizeStr(headerRow[i]);
+    for (const k of keys) {
+      if (h === k) return i;
     }
   }
-  return null;
+  for (let i = 0; i < headerRow.length; i++) {
+    const h = normalizeStr(headerRow[i]);
+    for (const k of keys) {
+      if (h.includes(k)) return i;
+    }
+  }
+  return -1;
 }
 
-function parseExcelRows(rows: Record<string, unknown>[]): Omit<Product, 'id'>[] {
-  const headerInfo = findHeaderRow(rows);
-  if (!headerInfo) {
-    // Fallback: assume first row is headers
-    if (rows.length < 2) return [];
+/* ── Find the header row by scanning first 15 rows ── */
+function findHeaderRowIndex(rows: Sheet): number {
+  for (let i = 0; i < Math.min(rows.length, 15); i++) {
+    const row = rows[i];
+    const nameCol = findColIndex(row, KEYWORDS.name);
+    const costCol = findColIndex(row, KEYWORDS.cost);
+    const stockCol = findColIndex(row, KEYWORDS.stock);
+    const found = [nameCol, costCol, stockCol].filter((c) => c >= 0).length;
+    if (found >= 2) return i;
   }
+  return -1;
+}
 
-  const { headerRow, startIndex } = headerInfo ?? { headerRow: rows[0], startIndex: 1 };
+function parseRows(rows: Sheet): Omit<Product, 'id'>[] {
+  if (rows.length === 0) return [];
 
-  const nameCol = findHeaderCol(headerRow, HEADER_KEYWORDS.name);
-  const costCol = findHeaderCol(headerRow, HEADER_KEYWORDS.cost);
-  const stockCol = findHeaderCol(headerRow, HEADER_KEYWORDS.stock);
-  const barcodeCol = findHeaderCol(headerRow, HEADER_KEYWORDS.barcode);
-  const gainCol = findHeaderCol(headerRow, HEADER_KEYWORDS.gain);
+  const headerIdx = findHeaderRowIndex(rows);
+  const headerRow = headerIdx >= 0 ? rows[headerIdx] : rows[0];
+  const startIdx = headerIdx >= 0 ? headerIdx + 1 : 1;
+
+  const nameCol = findColIndex(headerRow, KEYWORDS.name);
+  const costCol = findColIndex(headerRow, KEYWORDS.cost);
+  const stockCol = findColIndex(headerRow, KEYWORDS.stock);
+  const barcodeCol = findColIndex(headerRow, KEYWORDS.barcode);
+  const gainCol = findColIndex(headerRow, KEYWORDS.gain);
 
   const result: Omit<Product, 'id'>[] = [];
-  for (let i = startIndex; i < rows.length; i++) {
+  for (let i = startIdx; i < rows.length; i++) {
     const row = rows[i];
-    const name = nameCol ? String(row[nameCol] ?? '').trim() : '';
+    const name = nameCol >= 0 ? String(row[nameCol] ?? '').trim() : '';
     if (!name) continue;
 
     result.push({
-      barcode: barcodeCol ? String(row[barcodeCol] ?? '').trim() : '',
+      barcode: barcodeCol >= 0 ? String(row[barcodeCol] ?? '').trim() : '',
       name,
-      stock: stockCol ? safeNum(row[stockCol] as string | number) : 0,
-      priceBuy: costCol ? safeNum(row[costCol] as string | number) : 0,
-      gainPct: gainCol ? safeNum(row[gainCol] as string | number) : 30,
+      stock: stockCol >= 0 ? safeNum(row[stockCol]) : 0,
+      priceBuy: costCol >= 0 ? safeNum(row[costCol]) : 0,
+      gainPct: gainCol >= 0 ? safeNum(row[gainCol]) : 30,
     });
   }
   return result;
 }
-
-
 
 export default function Inventario() {
   const {
@@ -118,7 +116,6 @@ export default function Inventario() {
   const [importStatus, setImportStatus] = useState<'idle' | 'loading' | 'done' | 'error'>('idle');
   const [importCount, setImportCount] = useState(0);
 
-  // New product form state
   const [newBarcode, setNewBarcode] = useState('');
   const [newName, setNewName] = useState('');
   const [newStock, setNewStock] = useState('');
@@ -128,15 +125,12 @@ export default function Inventario() {
   const searchRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  /* ── Sort: stock <= 5 floats to top, then alphabetical ── */
+  /* ── Sort: stock <= 5 floats to top ── */
   const sortedProducts = useMemo(() => {
     const filtered = products.filter((p) => {
       if (!search.trim()) return true;
       const q = search.toLowerCase();
-      return (
-        p.barcode.toLowerCase().includes(q) ||
-        p.name.toLowerCase().includes(q)
-      );
+      return p.barcode.toLowerCase().includes(q) || p.name.toLowerCase().includes(q);
     });
     return [...filtered].sort((a, b) => {
       const aLow = a.stock <= 5 ? 0 : 1;
@@ -146,7 +140,6 @@ export default function Inventario() {
     });
   }, [products, search]);
 
-  /* ── Auto-focus search after import or add ── */
   useEffect(() => {
     if (importStatus === 'done') {
       const timer = setTimeout(() => setImportStatus('idle'), 3000);
@@ -154,15 +147,12 @@ export default function Inventario() {
     }
   }, [importStatus]);
 
-  /* ── Quick add via scanner ── */
   const handleQuickAdd = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== 'Enter') return;
     const q = search.trim();
     if (!q) return;
     const existing = products.find(
-      (p) =>
-        p.barcode.toLowerCase() === q.toLowerCase() ||
-        p.name.toLowerCase() === q.toLowerCase(),
+      (p) => p.barcode.toLowerCase() === q.toLowerCase() || p.name.toLowerCase() === q.toLowerCase(),
     );
     if (existing) {
       updateProduct(existing.id, { stock: existing.stock + 1 });
@@ -174,29 +164,20 @@ export default function Inventario() {
     setSearch('');
   };
 
-  /* ── Excel/CSV file handler ── */
+  /* ── Excel/CSV file handler using read-excel-file ── */
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setImportStatus('loading');
     try {
-      const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: 'array' });
-      const sheetName = wb.SheetNames[0];
-      const sheet = wb.Sheets[sheetName];
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const rows: Record<string, any>[] = XLSX.utils.sheet_to_json(sheet, {
-        raw: true,
-        defval: '',
-      });
-
-      if (rows.length === 0) {
+      const rows = await readXlsxFile(file);
+      if (!rows || rows.length === 0) {
         setImportStatus('error');
         return;
       }
 
-      const parsed = parseExcelRows(rows);
+      const parsed = parseRows(rows as unknown as Sheet);
       if (parsed.length === 0) {
         setImportStatus('error');
         return;
@@ -209,13 +190,11 @@ export default function Inventario() {
       setImportStatus('error');
     }
 
-    // Reset file input so the same file can be re-selected
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   };
 
-  /* ── Add product form ── */
   const handleAddProduct = (e: React.FormEvent) => {
     e.preventDefault();
     addProduct({
@@ -234,7 +213,6 @@ export default function Inventario() {
     searchRef.current?.focus();
   };
 
-  /* ── Calculations per row ── */
   const calcRow = (p: Product) => {
     const buy = safeNum(p.priceBuy);
     const gain = safeNum(p.gainPct);
@@ -254,7 +232,7 @@ export default function Inventario() {
         <span className="text-gray-600">Inventario</span>
       </div>
 
-      {/* Top controls: rates + import + scanner */}
+      {/* Top controls */}
       <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-4 mb-4">
         <div className="flex flex-col lg:flex-row gap-4 lg:items-end">
           {/* Rates - top left */}
@@ -370,7 +348,6 @@ export default function Inventario() {
                     key={p.id}
                     className={`border-t border-gray-50 transition-colors ${isLowStock ? 'bg-red-50' : 'hover:bg-gray-50/50'}`}
                   >
-                    {/* Código de Barras - editable */}
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
                         {isLowStock && (
@@ -385,7 +362,6 @@ export default function Inventario() {
                       </div>
                     </td>
 
-                    {/* Nombre - editable */}
                     <td className="px-4 py-3">
                       <input
                         type="text"
@@ -395,7 +371,6 @@ export default function Inventario() {
                       />
                     </td>
 
-                    {/* Existencia - editable */}
                     <td className="px-4 py-3 text-center">
                       <input
                         type="number"
@@ -408,7 +383,6 @@ export default function Inventario() {
                       />
                     </td>
 
-                    {/* Precio Compra - editable */}
                     <td className="px-4 py-3 text-right">
                       <input
                         type="number"
@@ -419,7 +393,6 @@ export default function Inventario() {
                       />
                     </td>
 
-                    {/* % Ganancia - editable */}
                     <td className="px-4 py-3 text-center">
                       <input
                         type="number"
@@ -430,22 +403,18 @@ export default function Inventario() {
                       />
                     </td>
 
-                    {/* Precio Venta - calculated */}
                     <td className="px-4 py-3 text-right font-semibold text-gray-800">
                       ${priceSell.toFixed(2)}
                     </td>
 
-                    {/* Precio en Bs - calculated, blue */}
                     <td className="px-4 py-3 text-right font-semibold text-blue-600">
                       Bs {priceBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
 
-                    {/* Precio en $$ - calculated, green */}
                     <td className="px-4 py-3 text-right font-semibold text-green-700">
                       $$ {pricePts.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
 
-                    {/* Delete */}
                     <td className="px-4 py-3 text-center">
                       <button
                         onClick={() => deleteProduct(p.id)}
