@@ -35,75 +35,70 @@ type CellValue = number | string | Date | null | undefined;
 type Sheet = CellValue[][];
 
 /*
- * Hardcoded index-based parser for the client's specific Excel format.
- * Structure: header row ~row 4, columns are:
- *   [0] = Existencia, [2] = Descripcion, [3] = Costo
- * Data rows: [2] has the product name (skip if empty)
+ * Bulletproof parser — relative extraction by data type, not by column index.
+ * Ignores the first 5 rows entirely (hidden rows, merged cells, garbage).
+ * For each remaining row:
+ *   - First non-empty string that isn't a number = product name
+ *   - All real numbers collected in order: [0]=cost, [2]=stock (fallbacks for missing)
  */
 
-// Fixed column indices based on the real file structure
-const IDX_EXISTENCIA = 0;
-const IDX_DESCRIPCION = 2;
-const IDX_COSTO = 3;
+function isNumericString(s: string): boolean {
+  const cleaned = s.replace(/[^0-9.,-]/g, '').replace(/,/g, '.');
+  return cleaned.length > 0 && !isNaN(parseFloat(cleaned));
+}
 
 function smartParse(rows: Sheet): Omit<Product, 'id'>[] {
-  if (rows.length === 0) return [];
+  if (rows.length <= 5) return [];
 
-  // Step 1: Find the header row by scanning for "descripci" in index [2]
-  let headerIdx = -1;
-  for (let i = 0; i < rows.length; i++) {
-    const row = rows[i];
-    const cell2 = normalizeStr(row[IDX_DESCRIPCION]);
-    if (cell2.includes('descripci') || cell2.includes('nombre') || cell2.includes('producto')) {
-      headerIdx = i;
-      break;
-    }
-  }
-
-  // Fallback: try to find "descripci" in ANY column of any row
-  if (headerIdx < 0) {
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      for (let j = 0; j < row.length; j++) {
-        const norm = normalizeStr(row[j]);
-        if (norm.includes('descripci') || norm.includes('nombre') || norm.includes('producto')) {
-          headerIdx = i;
-          break;
-        }
-      }
-      if (headerIdx >= 0) break;
-    }
-  }
-
-  // If still not found, try assuming row index 3 (the known position)
-  if (headerIdx < 0 && rows.length > 4) {
-    headerIdx = 3;
-  }
-
-  // If we have too few rows, bail
-  if (headerIdx < 0 || headerIdx + 1 >= rows.length) return [];
-
-  // Step 2: Slice data rows after the header
-  const dataRows = rows.slice(headerIdx + 1);
+  // Skip the first 5 rows completely
+  const productRows = rows.slice(5);
   const result: Omit<Product, 'id'>[] = [];
 
-  for (const row of dataRows) {
-    // Extract name from fixed index [2] — skip if empty
-    const name = String(row[IDX_DESCRIPCION] ?? '').trim();
+  for (const row of productRows) {
+    // Collect all real numbers in the row, in order
+    const numbersInRow: number[] = [];
+    // Find the first valid text (non-empty, not a number) = product name
+    let name = '';
+
+    for (const val of row) {
+      if (val === null || val === undefined) continue;
+
+      if (typeof val === 'number') {
+        if (!isNaN(val)) numbersInRow.push(val);
+        continue;
+      }
+
+      const strVal = String(val).trim();
+      if (!strVal) continue;
+
+      // If it looks like a number string, treat it as a number
+      if (isNumericString(strVal) && !isNaN(parseFloat(strVal.replace(/,/g, '.')))) {
+        numbersInRow.push(parseFloat(strVal.replace(/,/g, '.')));
+        continue;
+      }
+
+      // It's a text string — first one wins as the product name
+      if (!name) {
+        name = strVal;
+      }
+    }
+
+    // Skip rows with no text name
     if (!name) continue;
 
-    // Direct extraction using hardcoded indices
-    const stock = safeNum(row[IDX_EXISTENCIA]);
-    const priceBuy = safeNum(row[IDX_COSTO]);
+    // Extract values relative to the numbers found in the row
+    const cost = numbersInRow.length > 0 ? numbersInRow[0] : 0;
+    const stock = numbersInRow.length > 2 ? numbersInRow[2] : 0;
 
     result.push({
       barcode: '',
       name,
       stock,
-      priceBuy,
+      priceBuy: cost,
       gainPct: 30,
     });
   }
+
   return result;
 }
 
