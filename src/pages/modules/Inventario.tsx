@@ -35,89 +35,73 @@ type CellValue = number | string | Date | null | undefined;
 type Sheet = CellValue[][];
 
 /*
- * Robust Smart Parsing — index-based extraction:
- * 1. Pad all rows to equal length (fixes ragged arrays from empty trailing cells)
- * 2. Scan every row top-to-bottom for the header (matches "descripcion" or "costo")
- * 3. Use exact column indices from the header row
- * 4. Extract data rows by those fixed indices
- * 5. Force empty/NaN numeric values to 0
- * 6. Inject 30% ganancia if no column exists
+ * Hardcoded index-based parser for the client's specific Excel format.
+ * Structure: header row ~row 4, columns are:
+ *   [0] = Existencia, [2] = Descripcion, [3] = Costo
+ * Data rows: [2] has the product name (skip if empty)
  */
 
-function cellToNormStr(cell: CellValue): string {
-  return normalizeStr(cell);
-}
-
-function padRow(row: CellValue[], maxLen: number): CellValue[] {
-  const padded = [...row];
-  while (padded.length < maxLen) padded.push('');
-  return padded;
-}
-
-function findIndexInRow(row: CellValue[], matcher: (s: string) => boolean): number {
-  return row.findIndex((cell) => {
-    const s = cellToNormStr(cell);
-    return s.length > 0 && matcher(s);
-  });
-}
+// Fixed column indices based on the real file structure
+const IDX_EXISTENCIA = 0;
+const IDX_DESCRIPCION = 2;
+const IDX_COSTO = 3;
 
 function smartParse(rows: Sheet): Omit<Product, 'id'>[] {
   if (rows.length === 0) return [];
 
-  // Step 1: Find max row width and pad ALL rows to equal length
-  const maxLen = rows.reduce((max, r) => Math.max(max, r.length), 0);
-  const padded = rows.map((r) => padRow(r, maxLen));
-
-  // Step 2: Scan every row to find the header row
+  // Step 1: Find the header row by scanning for "descripci" in index [2]
   let headerIdx = -1;
-  for (let i = 0; i < padded.length; i++) {
-    const row = padded[i];
-    const hasDesc = findIndexInRow(row, (s) => s.includes('descripcion')) >= 0;
-    const hasCost = findIndexInRow(row, (s) => s === 'costo' || s.includes('costo')) >= 0;
-    if (hasDesc || hasCost) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const cell2 = normalizeStr(row[IDX_DESCRIPCION]);
+    if (cell2.includes('descripci') || cell2.includes('nombre') || cell2.includes('producto')) {
       headerIdx = i;
       break;
     }
   }
 
-  // Fallback: if no header found, assume first row
+  // Fallback: try to find "descripci" in ANY column of any row
   if (headerIdx < 0) {
-    if (padded.length < 2) return [];
-    headerIdx = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      for (let j = 0; j < row.length; j++) {
+        const norm = normalizeStr(row[j]);
+        if (norm.includes('descripci') || norm.includes('nombre') || norm.includes('producto')) {
+          headerIdx = i;
+          break;
+        }
+      }
+      if (headerIdx >= 0) break;
+    }
   }
 
-  const headerRow = padded[headerIdx];
+  // If still not found, try assuming row index 3 (the known position)
+  if (headerIdx < 0 && rows.length > 4) {
+    headerIdx = 3;
+  }
 
-  // Step 3: Find exact column indices using direct string matching
-  const descIndex = findIndexInRow(headerRow, (s) => s.includes('descripcion') || s.includes('nombre') || s.includes('producto') || s.includes('description') || s.includes('articulo'));
-  const costoIndex = findIndexInRow(headerRow, (s) => s === 'costo' || s.includes('costo') || s.includes('cost') || s.includes('precio compra') || s.includes('precio de compra'));
-  const existenciaIndex = findIndexInRow(headerRow, (s) => s.includes('existencia') || s.includes('cantidad') || s.includes('stock') || s.includes('inventario') || s.includes('cant'));
-  const barcodeIndex = findIndexInRow(headerRow, (s) => s.includes('codigo') || s.includes('barcode') || s.includes('sku'));
-  const gainIndex = findIndexInRow(headerRow, (s) => s.includes('ganancia') || s.includes('margen') || s.includes('margin') || s.includes('utilidad') || s.includes('gain') || s.includes('profit'));
+  // If we have too few rows, bail
+  if (headerIdx < 0 || headerIdx + 1 >= rows.length) return [];
 
-  // Must have at least a name or cost column to proceed
-  if (descIndex < 0 && costoIndex < 0) return [];
-
-  // Step 4: Slice data rows and extract using exact indices
-  const dataRows = padded.slice(headerIdx + 1);
+  // Step 2: Slice data rows after the header
+  const dataRows = rows.slice(headerIdx + 1);
   const result: Omit<Product, 'id'>[] = [];
 
   for (const row of dataRows) {
-    // Get name — skip rows with no name
-    const name = descIndex >= 0 ? String(row[descIndex] ?? '').trim() : '';
+    // Extract name from fixed index [2] — skip if empty
+    const name = String(row[IDX_DESCRIPCION] ?? '').trim();
     if (!name) continue;
 
-    // Force empty/NaN to 0 for numeric fields
-    const stock = existenciaIndex >= 0 ? safeNum(row[existenciaIndex]) : 0;
-    const priceBuy = costoIndex >= 0 ? safeNum(row[costoIndex]) : 0;
-    const gainPct = gainIndex >= 0 ? safeNum(row[gainIndex]) : 30;
+    // Direct extraction using hardcoded indices
+    const stock = safeNum(row[IDX_EXISTENCIA]);
+    const priceBuy = safeNum(row[IDX_COSTO]);
 
     result.push({
-      barcode: barcodeIndex >= 0 ? String(row[barcodeIndex] ?? '').trim() : '',
+      barcode: '',
       name,
       stock,
       priceBuy,
-      gainPct: gainPct > 0 ? gainPct : 30,
+      gainPct: 30,
     });
   }
   return result;
