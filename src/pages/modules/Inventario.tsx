@@ -22,7 +22,6 @@ function safeNum(v: unknown, fallback = 0): number {
   return isNaN(n) ? fallback : n;
 }
 
-/* Strip accents/tildes and normalize for comparison */
 function stripAccents(s: string): string {
   return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
@@ -34,68 +33,60 @@ function normalizeStr(s: unknown): string {
 type CellValue = number | string | Date | null | undefined;
 type Sheet = CellValue[][];
 
-/*
- * Bulletproof parser — relative extraction by data type, not by column index.
- * Ignores the first 5 rows entirely (hidden rows, merged cells, garbage).
- * For each remaining row:
- *   - First non-empty string that isn't a number = product name
- *   - All real numbers collected in order: [0]=cost, [2]=stock (fallbacks for missing)
- */
-
 function isNumericString(s: string): boolean {
   const cleaned = s.replace(/[^0-9.,-]/g, '').replace(/,/g, '.');
   return cleaned.length > 0 && !isNaN(parseFloat(cleaned));
 }
 
 function smartParse(rows: Sheet): Omit<Product, 'id'>[] {
+  // Omitimos las primeras 5 filas (basura del contador y encabezados desalineados)
   if (rows.length <= 5) return [];
 
-  // Skip the first 5 rows completely
   const productRows = rows.slice(5);
   const result: Omit<Product, 'id'>[] = [];
 
   for (const row of productRows) {
-    // Collect all real numbers in the row, in order
-    const numbersInRow: number[] = [];
-    // Find the first valid text (non-empty, not a number) = product name
     let name = '';
+    const numbersInRow: number[] = [];
 
-    for (const val of row) {
-      if (val === null || val === undefined) continue;
+    // Buscamos específicamente en los primeros 10 índices para evitar basura del final de la fila
+    for (let i = 0; i < Math.min(row.length, 10); i++) {
+        const val = row[i];
+        if (val === null || val === undefined) continue;
 
-      if (typeof val === 'number') {
-        if (!isNaN(val)) numbersInRow.push(val);
-        continue;
-      }
+        if (typeof val === 'number') {
+            if (!isNaN(val)) numbersInRow.push(val);
+            continue;
+        }
 
-      const strVal = String(val).trim();
-      if (!strVal) continue;
+        const strVal = String(val).trim();
+        if (!strVal) continue;
 
-      // If it looks like a number string, treat it as a number
-      if (isNumericString(strVal) && !isNaN(parseFloat(strVal.replace(/,/g, '.')))) {
-        numbersInRow.push(parseFloat(strVal.replace(/,/g, '.')));
-        continue;
-      }
+        if (isNumericString(strVal)) {
+            numbersInRow.push(parseFloat(strVal.replace(/,/g, '.')));
+            continue;
+        }
 
-      // It's a text string — first one wins as the product name
-      if (!name) {
-        name = strVal;
-      }
+        // Si es un texto y tiene más de 2 caracteres, lo tomamos como nombre si no tenemos uno.
+        if (!name && strVal.length > 2 && !strVal.toLowerCase().includes('existencia') && !strVal.toLowerCase().includes('costo') && !strVal.toLowerCase().includes('descripcion')) {
+            name = strVal;
+        }
     }
 
-    // Skip rows with no text name
     if (!name) continue;
 
-    // Extract values relative to the numbers found in the row
+    // Asumimos que el primer número que encontremos en la fila es el costo.
     const cost = numbersInRow.length > 0 ? numbersInRow[0] : 0;
-    const stock = numbersInRow.length > 2 ? numbersInRow[2] : 0;
+    
+    // Asumimos existencia 0 si no hay números claros antes del costo
+    const stock = 0; 
 
     result.push({
       barcode: '',
       name,
       stock,
       priceBuy: cost,
-      gainPct: 30,
+      gainPct: 30, // Inyectamos el 30% por defecto
     });
   }
 
@@ -129,7 +120,6 @@ export default function Inventario() {
   const searchRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  /* ── Sort: stock <= 5 floats to top ── */
   const sortedProducts = useMemo(() => {
     const filtered = products.filter((p) => {
       if (!search.trim()) return true;
@@ -168,7 +158,6 @@ export default function Inventario() {
     setSearch('');
   };
 
-  /* ── Excel/CSV file handler using read-excel-file ── */
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -228,7 +217,6 @@ export default function Inventario() {
 
   return (
     <div className="p-4 lg:p-6 max-w-7xl mx-auto">
-      {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-sm text-gray-400 mb-4">
         <Package className="w-4 h-4 text-gold-500" />
         <span className="text-gold-500 font-medium">Módulo 1</span>
@@ -236,10 +224,8 @@ export default function Inventario() {
         <span className="text-gray-600">Inventario</span>
       </div>
 
-      {/* Top controls */}
       <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-4 mb-4">
         <div className="flex flex-col lg:flex-row gap-4 lg:items-end">
-          {/* Rates - top left */}
           <div className="flex gap-3">
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Tasa Bs</label>
@@ -252,86 +238,7 @@ export default function Inventario() {
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Tasa $$</label>
-              <input
-                type="number"
-                step="0.01"
-                value={tasaPts}
-                onChange={(e) => setTasaPts(safeNum(e.target.value, tasaPts))}
-                className="w-28 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent"
-              />
-            </div>
-          </div>
-
-          <div className="flex-1" />
-
-          {/* Load Excel/CSV button */}
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={importStatus === 'loading'}
-            className="flex items-center gap-2 px-4 py-2 bg-gold-400 hover:bg-gold-500 text-white rounded-lg text-sm font-semibold transition-all shadow-gold-sm whitespace-nowrap disabled:opacity-50"
-          >
-            {importStatus === 'loading' ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <FileSpreadsheet className="w-4 h-4" />
-            )}
-            Cargar Inventario (Excel/CSV)
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".xlsx, .xls, .csv"
-            onChange={handleFileChange}
-            className="hidden"
-          />
-        </div>
-
-        {/* Import status toast */}
-        {importStatus === 'done' && (
-          <div className="mt-3 flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm rounded-lg px-4 py-2.5">
-            <CheckCircle2 className="w-4 h-4" />
-            Se importaron <strong>{importCount}</strong> productos correctamente.
-          </div>
-        )}
-        {importStatus === 'error' && (
-          <div className="mt-3 flex items-center gap-2 bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg px-4 py-2.5">
-            <AlertTriangle className="w-4 h-4" />
-            No se pudieron leer los datos. Verifique que el archivo tenga columnas "Descripción", "Costo" y "Existencia".
-          </div>
-        )}
-
-        {/* Scanner / Search */}
-        <div className="mt-3 relative">
-          <ScanLine className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gold-400" />
-          <input
-            ref={searchRef}
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            onKeyDown={handleQuickAdd}
-            placeholder="Escanear Código de Barras / Buscar producto..."
-            className="w-full pl-11 pr-4 py-3 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent"
-            autoFocus
-          />
-        </div>
-      </div>
-
-      {/* Products table */}
-      <div className="bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden">
-        <div className="h-1.5 bg-gradient-to-r from-gold-300 via-gold-400 to-gold-500" />
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="bg-gold-50 text-gray-600 text-xs uppercase tracking-wider">
-                <th className="text-left px-4 py-3 font-semibold">Código de Barras</th>
-                <th className="text-left px-4 py-3 font-semibold">Nombre del Producto</th>
-                <th className="text-center px-4 py-3 font-semibold">Existencia</th>
-                <th className="text-right px-4 py-3 font-semibold">Precio Compra</th>
-                <th className="text-center px-4 py-3 font-semibold">% Ganancia</th>
-                <th className="text-right px-4 py-3 font-semibold">Precio Venta</th>
-                <th className="text-right px-4 py-3 font-semibold text-blue-600">Precio en Bs</th>
-                <th className="text-right px-4 py-3 font-semibold text-green-700">Precio en $$</th>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Tasa $$</label>               <input                 type="number"                 step="0.01"                 value={tasaPts}                 onChange={(e) => setTasaPts(safeNum(e.target.value, tasaPts))}                 className="w-28 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent"               />             </div>           </div>            <div className="flex-1" />            <button             onClick={() => fileInputRef.current?.click()}             disabled={importStatus === 'loading'}             className="flex items-center gap-2 px-4 py-2 bg-gold-400 hover:bg-gold-500 text-white rounded-lg text-sm font-semibold transition-all shadow-gold-sm whitespace-nowrap disabled:opacity-50"           >             {importStatus === 'loading' ? (               <Loader2 className="w-4 h-4 animate-spin" />             ) : (               <FileSpreadsheet className="w-4 h-4" />             )}             Cargar Inventario (Excel/CSV)           </button>           <input             ref={fileInputRef}             type="file"             accept=".xlsx, .xls, .csv"             onChange={handleFileChange}             className="hidden"           />         </div>          {importStatus === 'done' && (           <div className="mt-3 flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm rounded-lg px-4 py-2.5">             <CheckCircle2 className="w-4 h-4" />             Se importaron <strong>{importCount}</strong> productos correctamente.           </div>         )}         {importStatus === 'error' && (           <div className="mt-3 flex items-center gap-2 bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg px-4 py-2.5">             <AlertTriangle className="w-4 h-4" />             No se pudieron leer los datos. Verifique que el archivo Excel sea el correcto.           </div>         )}          <div className="mt-3 relative">           <ScanLine className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gold-400" />           <input             ref={searchRef}             type="text"             value={search}             onChange={(e) => setSearch(e.target.value)}             onKeyDown={handleQuickAdd}             placeholder="Escanear Código de Barras / Buscar producto..."             className="w-full pl-11 pr-4 py-3 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent"             autoFocus           />         </div>       </div>        <div className="bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden">         <div className="h-1.5 bg-gradient-to-r from-gold-300 via-gold-400 to-gold-500" />         <div className="overflow-x-auto">           <table className="w-full text-sm">             <thead>               <tr className="bg-gold-50 text-gray-600 text-xs uppercase tracking-wider">                 <th className="text-left px-4 py-3 font-semibold">Código de Barras</th>                 <th className="text-left px-4 py-3 font-semibold">Nombre del Producto</th>                 <th className="text-center px-4 py-3 font-semibold">Existencia</th>                 <th className="text-right px-4 py-3 font-semibold">Precio Compra</th>                 <th className="text-center px-4 py-3 font-semibold">\% Ganancia</th>                 <th className="text-right px-4 py-3 font-semibold">Precio Venta</th>                 <th className="text-right px-4 py-3 font-semibold text-blue-600">Precio en Bs</th>                 <th className="text-right px-4 py-3 font-semibold text-green-700">Precio en $$</th>
                 <th className="text-center px-4 py-3 font-semibold"></th>
               </tr>
             </thead>
@@ -365,7 +272,6 @@ export default function Inventario() {
                         />
                       </div>
                     </td>
-
                     <td className="px-4 py-3">
                       <input
                         type="text"
@@ -374,7 +280,6 @@ export default function Inventario() {
                         className="w-full font-medium text-gray-700 px-1 py-1 border border-transparent rounded hover:border-gray-200 focus:outline-none focus:ring-1 focus:ring-gold-400 focus:border-transparent bg-transparent"
                       />
                     </td>
-
                     <td className="px-4 py-3 text-center">
                       <input
                         type="number"
@@ -386,7 +291,6 @@ export default function Inventario() {
                             : 'border-transparent hover:border-gray-200 text-gray-700'}`}
                       />
                     </td>
-
                     <td className="px-4 py-3 text-right">
                       <input
                         type="number"
@@ -396,7 +300,6 @@ export default function Inventario() {
                         className="w-20 text-right px-2 py-1 border border-transparent rounded text-sm hover:border-gray-200 focus:outline-none focus:ring-1 focus:ring-gold-400 focus:border-transparent bg-transparent"
                       />
                     </td>
-
                     <td className="px-4 py-3 text-center">
                       <input
                         type="number"
@@ -406,19 +309,9 @@ export default function Inventario() {
                         className="w-16 text-center px-1 py-1 border border-transparent rounded text-sm hover:border-gray-200 focus:outline-none focus:ring-1 focus:ring-gold-400 focus:border-transparent bg-transparent"
                       />
                     </td>
-
                     <td className="px-4 py-3 text-right font-semibold text-gray-800">
-                      ${priceSell.toFixed(2)}
+                      ${priceSell.toFixed(2)}                     </td>                     <td className="px-4 py-3 text-right font-semibold text-blue-600">                       Bs {priceBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}                     </td>                     <td className="px-4 py-3 text-right font-semibold text-green-700">                       $$ {pricePts.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </td>
-
-                    <td className="px-4 py-3 text-right font-semibold text-blue-600">
-                      Bs {priceBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-
-                    <td className="px-4 py-3 text-right font-semibold text-green-700">
-                      $$ {pricePts.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-
                     <td className="px-4 py-3 text-center">
                       <button
                         onClick={() => deleteProduct(p.id)}
@@ -436,7 +329,6 @@ export default function Inventario() {
         </div>
       </div>
 
-      {/* Add product dialog */}
       {showAdd && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-md relative">
