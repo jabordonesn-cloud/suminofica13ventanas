@@ -10,7 +10,7 @@ import {
   CheckCircle2,
   Loader2,
 } from 'lucide-react';
-import readXlsxFile from 'read-excel-file/browser';
+import * as XLSX from 'xlsx';
 import { useStore } from '@/context/StoreContext';
 import type { Product } from '@/types/product';
 
@@ -20,77 +20,6 @@ function safeNum(v: unknown, fallback = 0): number {
   const cleaned = String(v).replace(/[^0-9.,-]/g, '').replace(/,/g, '.');
   const n = parseFloat(cleaned);
   return isNaN(n) ? fallback : n;
-}
-
-function stripAccents(s: string): string {
-  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-}
-
-function normalizeStr(s: unknown): string {
-  return stripAccents(String(s ?? '').trim().toLowerCase()).replace(/\s+/g, ' ');
-}
-
-type CellValue = number | string | Date | null | undefined;
-type Sheet = CellValue[][];
-
-function isNumericString(s: string): boolean {
-  const cleaned = s.replace(/[^0-9.,-]/g, '').replace(/,/g, '.');
-  return cleaned.length > 0 && !isNaN(parseFloat(cleaned));
-}
-
-function smartParse(rows: Sheet): Omit<Product, 'id'>[] {
-  // Omitimos las primeras 5 filas (basura del contador y encabezados desalineados)
-  if (rows.length <= 5) return [];
-
-  const productRows = rows.slice(5);
-  const result: Omit<Product, 'id'>[] = [];
-
-  for (const row of productRows) {
-    let name = '';
-    const numbersInRow: number[] = [];
-
-    // Buscamos específicamente en los primeros 10 índices para evitar basura del final de la fila
-    for (let i = 0; i < Math.min(row.length, 10); i++) {
-        const val = row[i];
-        if (val === null || val === undefined) continue;
-
-        if (typeof val === 'number') {
-            if (!isNaN(val)) numbersInRow.push(val);
-            continue;
-        }
-
-        const strVal = String(val).trim();
-        if (!strVal) continue;
-
-        if (isNumericString(strVal)) {
-            numbersInRow.push(parseFloat(strVal.replace(/,/g, '.')));
-            continue;
-        }
-
-        // Si es un texto y tiene más de 2 caracteres, lo tomamos como nombre si no tenemos uno.
-        if (!name && strVal.length > 2 && !strVal.toLowerCase().includes('existencia') && !strVal.toLowerCase().includes('costo') && !strVal.toLowerCase().includes('descripcion')) {
-            name = strVal;
-        }
-    }
-
-    if (!name) continue;
-
-    // Asumimos que el primer número que encontremos en la fila es el costo.
-    const cost = numbersInRow.length > 0 ? numbersInRow[0] : 0;
-    
-    // Asumimos existencia 0 si no hay números claros antes del costo
-    const stock = 0; 
-
-    result.push({
-      barcode: '',
-      name,
-      stock,
-      priceBuy: cost,
-      gainPct: 30, // Inyectamos el 30% por defecto
-    });
-  }
-
-  return result;
 }
 
 export default function Inventario() {
@@ -158,31 +87,94 @@ export default function Inventario() {
     setSearch('');
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  /* ── LECTOR TRACTOR EXCEL (Fuerza Bruta) ── */
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setImportStatus('loading');
-    try {
-      const rows = await readXlsxFile(file);
-      if (!rows || rows.length === 0) {
+    const reader = new FileReader();
+    
+    reader.onload = (evt) => {
+      try {
+        const bstr = evt.target?.result;
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
+        
+        // Extraemos absolutamente todo en una matriz gigante
+        const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }) as any[][];
+
+        const nuevosProductos: Omit<Product, 'id'>[] = [];
+
+        // Ignoramos las primeras 5 filas llenas de basura
+        for (let i = 5; i < data.length; i++) {
+          const row = data[i];
+          if (!row || !Array.isArray(row)) continue;
+
+          let name = '';
+          const numbersInRow: number[] = [];
+
+          // Revisamos celda por celda en la fila
+          for (let j = 0; j < Math.min(row.length, 15); j++) {
+            const val = row[j];
+            if (val === null || val === undefined || val === '') continue;
+
+            if (typeof val === 'number') {
+              numbersInRow.push(val);
+              continue;
+            }
+
+            const strVal = String(val).trim();
+            if (!strVal) continue;
+
+            // Intentar limpiar y convertir a número si es un precio camuflado
+            const cleanedNum = strVal.replace(/[^0-9.,-]/g, '').replace(/,/g, '.');
+            if (cleanedNum.length > 0 && !isNaN(parseFloat(cleanedNum))) {
+              numbersInRow.push(parseFloat(cleanedNum));
+              continue;
+            }
+
+            // Si llegamos aquí, es texto. Si tiene más de 3 letras y no es título, es el producto.
+            if (!name && strVal.length > 3 && !strVal.toLowerCase().includes('existencia') && !strVal.toLowerCase().includes('costo') && !strVal.toLowerCase().includes('descripcion')) {
+              name = strVal;
+            }
+          }
+
+          if (!name) continue; // Si no hay producto, saltar fila
+
+          // El primer número de la fila es el costo
+          const cost = numbersInRow.length > 0 ? numbersInRow[0] : 0;
+          
+          // La existencia es difícil de pescar en Excels rotos, forzamos 0
+          const stock = 0; 
+
+          nuevosProductos.push({
+            barcode: '',
+            name,
+            stock,
+            priceBuy: cost,
+            gainPct: 30 // Tu margen del 30% automático
+          });
+        }
+
+        if (nuevosProductos.length === 0) {
+          setImportStatus('error');
+          return;
+        }
+
+        addManyProducts(nuevosProductos);
+        setImportCount(nuevosProductos.length);
+        setImportStatus('done');
+      } catch (error) {
+        console.error(error);
         setImportStatus('error');
-        return;
       }
-
-      const parsed = smartParse(rows as unknown as Sheet);
-      if (parsed.length === 0) {
-        setImportStatus('error');
-        return;
-      }
-
-      addManyProducts(parsed);
-      setImportCount(parsed.length);
-      setImportStatus('done');
-    } catch {
-      setImportStatus('error');
-    }
-
+    };
+    
+    reader.onerror = () => setImportStatus('error');
+    reader.readAsBinaryString(file);
+    
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
