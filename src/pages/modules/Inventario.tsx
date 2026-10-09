@@ -35,59 +35,46 @@ type CellValue = number | string | Date | null | undefined;
 type Sheet = CellValue[][];
 
 /*
- * Smart Parsing Algorithm:
- * 1. Scan EVERY row from top to bottom (no row limit)
- * 2. A row is the header if ANY cell matches "descripcion" or "costo"
- *    (case-insensitive, accent-insensitive, partial match)
- * 3. Once found, map columns by scanning header cells
- * 4. Data rows start from the row AFTER the header
- * 5. Empty/NaN values for Costo and Existencia are forced to 0
- * 6. If no % Ganancia column exists, inject 30% default
+ * Robust Smart Parsing — index-based extraction:
+ * 1. Pad all rows to equal length (fixes ragged arrays from empty trailing cells)
+ * 2. Scan every row top-to-bottom for the header (matches "descripcion" or "costo")
+ * 3. Use exact column indices from the header row
+ * 4. Extract data rows by those fixed indices
+ * 5. Force empty/NaN numeric values to 0
+ * 6. Inject 30% ganancia if no column exists
  */
 
-function cellMatches(cell: CellValue, keywords: string[]): boolean {
-  const h = normalizeStr(cell);
-  if (!h) return false;
-  return keywords.some((k) => h === k || h.includes(k));
+function cellToNormStr(cell: CellValue): string {
+  return normalizeStr(cell);
 }
 
-function findColIndex(headerRow: CellValue[], keywords: string[]): number {
-  // First pass: exact match
-  for (let i = 0; i < headerRow.length; i++) {
-    if (cellMatches(headerRow[i], keywords)) {
-      const h = normalizeStr(headerRow[i]);
-      if (keywords.some((k) => h === k)) return i;
-    }
-  }
-  // Second pass: partial/includes match
-  for (let i = 0; i < headerRow.length; i++) {
-    if (cellMatches(headerRow[i], keywords)) return i;
-  }
-  return -1;
+function padRow(row: CellValue[], maxLen: number): CellValue[] {
+  const padded = [...row];
+  while (padded.length < maxLen) padded.push('');
+  return padded;
 }
 
-const NAME_KEYS = ['descripcion', 'nombre', 'producto', 'description', 'articulo'];
-const COST_KEYS = ['costo', 'cost', 'precio compra', 'preciocompra', 'precio de compra'];
-const STOCK_KEYS = ['existencia', 'existencias', 'cantidad', 'stock', 'inventario', 'cant'];
-const BARCODE_KEYS = ['codigo', 'barcode', 'cod', 'sku', 'codigo de barras'];
-const GAIN_KEYS = ['ganancia', 'margen', 'margin', 'gain', 'utilidad', 'profit'];
-
-function isHeaderRow(row: CellValue[]): boolean {
-  // A row is a header if it contains "descripcion" OR "costo"
-  for (const cell of row) {
-    if (cellMatches(cell, NAME_KEYS)) return true;
-    if (cellMatches(cell, COST_KEYS)) return true;
-  }
-  return false;
+function findIndexInRow(row: CellValue[], matcher: (s: string) => boolean): number {
+  return row.findIndex((cell) => {
+    const s = cellToNormStr(cell);
+    return s.length > 0 && matcher(s);
+  });
 }
 
 function smartParse(rows: Sheet): Omit<Product, 'id'>[] {
   if (rows.length === 0) return [];
 
-  // Step 1: Scan ALL rows to find the header row
+  // Step 1: Find max row width and pad ALL rows to equal length
+  const maxLen = rows.reduce((max, r) => Math.max(max, r.length), 0);
+  const padded = rows.map((r) => padRow(r, maxLen));
+
+  // Step 2: Scan every row to find the header row
   let headerIdx = -1;
-  for (let i = 0; i < rows.length; i++) {
-    if (isHeaderRow(rows[i])) {
+  for (let i = 0; i < padded.length; i++) {
+    const row = padded[i];
+    const hasDesc = findIndexInRow(row, (s) => s.includes('descripcion')) >= 0;
+    const hasCost = findIndexInRow(row, (s) => s === 'costo' || s.includes('costo')) >= 0;
+    if (hasDesc || hasCost) {
       headerIdx = i;
       break;
     }
@@ -95,39 +82,38 @@ function smartParse(rows: Sheet): Omit<Product, 'id'>[] {
 
   // Fallback: if no header found, assume first row
   if (headerIdx < 0) {
-    if (rows.length < 2) return [];
+    if (padded.length < 2) return [];
     headerIdx = 0;
   }
 
-  const headerRow = rows[headerIdx];
-  const startIdx = headerIdx + 1;
+  const headerRow = padded[headerIdx];
 
-  // Step 2: Map columns from the header row
-  const nameCol = findColIndex(headerRow, NAME_KEYS);
-  const costCol = findColIndex(headerRow, COST_KEYS);
-  const stockCol = findColIndex(headerRow, STOCK_KEYS);
-  const barcodeCol = findColIndex(headerRow, BARCODE_KEYS);
-  const gainCol = findColIndex(headerRow, GAIN_KEYS);
+  // Step 3: Find exact column indices using direct string matching
+  const descIndex = findIndexInRow(headerRow, (s) => s.includes('descripcion') || s.includes('nombre') || s.includes('producto') || s.includes('description') || s.includes('articulo'));
+  const costoIndex = findIndexInRow(headerRow, (s) => s === 'costo' || s.includes('costo') || s.includes('cost') || s.includes('precio compra') || s.includes('precio de compra'));
+  const existenciaIndex = findIndexInRow(headerRow, (s) => s.includes('existencia') || s.includes('cantidad') || s.includes('stock') || s.includes('inventario') || s.includes('cant'));
+  const barcodeIndex = findIndexInRow(headerRow, (s) => s.includes('codigo') || s.includes('barcode') || s.includes('sku'));
+  const gainIndex = findIndexInRow(headerRow, (s) => s.includes('ganancia') || s.includes('margen') || s.includes('margin') || s.includes('utilidad') || s.includes('gain') || s.includes('profit'));
 
-  // If we couldn't find a name column, this isn't a valid header
-  if (nameCol < 0 && costCol < 0) return [];
+  // Must have at least a name or cost column to proceed
+  if (descIndex < 0 && costoIndex < 0) return [];
 
-  // Step 3: Extract data rows with fallback to 0 for empty/NaN
+  // Step 4: Slice data rows and extract using exact indices
+  const dataRows = padded.slice(headerIdx + 1);
   const result: Omit<Product, 'id'>[] = [];
-  for (let i = startIdx; i < rows.length; i++) {
-    const row = rows[i];
 
+  for (const row of dataRows) {
     // Get name — skip rows with no name
-    const name = nameCol >= 0 ? String(row[nameCol] ?? '').trim() : '';
+    const name = descIndex >= 0 ? String(row[descIndex] ?? '').trim() : '';
     if (!name) continue;
 
     // Force empty/NaN to 0 for numeric fields
-    const stock = stockCol >= 0 ? safeNum(row[stockCol]) : 0;
-    const priceBuy = costCol >= 0 ? safeNum(row[costCol]) : 0;
-    const gainPct = gainCol >= 0 ? safeNum(row[gainCol]) : 30;
+    const stock = existenciaIndex >= 0 ? safeNum(row[existenciaIndex]) : 0;
+    const priceBuy = costoIndex >= 0 ? safeNum(row[costoIndex]) : 0;
+    const gainPct = gainIndex >= 0 ? safeNum(row[gainIndex]) : 30;
 
     result.push({
-      barcode: barcodeCol >= 0 ? String(row[barcodeCol] ?? '').trim() : '',
+      barcode: barcodeIndex >= 0 ? String(row[barcodeIndex] ?? '').trim() : '',
       name,
       stock,
       priceBuy,
