@@ -16,83 +16,122 @@ import type { Product } from '@/types/product';
 
 function safeNum(v: unknown, fallback = 0): number {
   if (v === null || v === undefined) return fallback;
-  const n = typeof v === 'number' ? v : parseFloat(String(v));
+  if (typeof v === 'number') return isNaN(v) ? fallback : v;
+  const cleaned = String(v).replace(/[^0-9.,-]/g, '').replace(/,/g, '.');
+  const n = parseFloat(cleaned);
   return isNaN(n) ? fallback : n;
 }
 
-function normalizeStr(s: unknown): string {
-  return String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+/* Strip accents/tildes and normalize for comparison */
+function stripAccents(s: string): string {
+  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
 
-/* ── Header keyword maps for intelligent detection ── */
-const KEYWORDS = {
-  name: ['descripcion', 'descripción', 'nombre', 'producto', 'description', 'articulo', 'artículo'],
-  cost: ['costo', 'cost', 'precio compra', 'preciocompra', 'purchase price', 'precio de compra'],
-  stock: ['existencia', 'existencias', 'cantidad', 'stock', 'inventory', 'cant', 'inventario'],
-  barcode: ['codigo', 'código', 'barcode', 'cod', 'codigo de barras', 'código de barras', 'sku'],
-  gain: ['ganancia', '% ganancia', '% de ganancia', 'ganancia %', 'margen', 'margin', 'gain', 'profit %', 'utilidad'],
-};
+function normalizeStr(s: unknown): string {
+  return stripAccents(String(s ?? '').trim().toLowerCase()).replace(/\s+/g, ' ');
+}
 
 type CellValue = number | string | Date | null | undefined;
 type Sheet = CellValue[][];
 
-function findColIndex(
-  headerRow: CellValue[],
-  keys: string[],
-): number {
+/*
+ * Smart Parsing Algorithm:
+ * 1. Scan EVERY row from top to bottom (no row limit)
+ * 2. A row is the header if ANY cell matches "descripcion" or "costo"
+ *    (case-insensitive, accent-insensitive, partial match)
+ * 3. Once found, map columns by scanning header cells
+ * 4. Data rows start from the row AFTER the header
+ * 5. Empty/NaN values for Costo and Existencia are forced to 0
+ * 6. If no % Ganancia column exists, inject 30% default
+ */
+
+function cellMatches(cell: CellValue, keywords: string[]): boolean {
+  const h = normalizeStr(cell);
+  if (!h) return false;
+  return keywords.some((k) => h === k || h.includes(k));
+}
+
+function findColIndex(headerRow: CellValue[], keywords: string[]): number {
+  // First pass: exact match
   for (let i = 0; i < headerRow.length; i++) {
-    const h = normalizeStr(headerRow[i]);
-    for (const k of keys) {
-      if (h === k) return i;
+    if (cellMatches(headerRow[i], keywords)) {
+      const h = normalizeStr(headerRow[i]);
+      if (keywords.some((k) => h === k)) return i;
     }
   }
+  // Second pass: partial/includes match
   for (let i = 0; i < headerRow.length; i++) {
-    const h = normalizeStr(headerRow[i]);
-    for (const k of keys) {
-      if (h.includes(k)) return i;
-    }
+    if (cellMatches(headerRow[i], keywords)) return i;
   }
   return -1;
 }
 
-/* ── Find the header row by scanning first 15 rows ── */
-function findHeaderRowIndex(rows: Sheet): number {
-  for (let i = 0; i < Math.min(rows.length, 15); i++) {
-    const row = rows[i];
-    const nameCol = findColIndex(row, KEYWORDS.name);
-    const costCol = findColIndex(row, KEYWORDS.cost);
-    const stockCol = findColIndex(row, KEYWORDS.stock);
-    const found = [nameCol, costCol, stockCol].filter((c) => c >= 0).length;
-    if (found >= 2) return i;
+const NAME_KEYS = ['descripcion', 'nombre', 'producto', 'description', 'articulo'];
+const COST_KEYS = ['costo', 'cost', 'precio compra', 'preciocompra', 'precio de compra'];
+const STOCK_KEYS = ['existencia', 'existencias', 'cantidad', 'stock', 'inventario', 'cant'];
+const BARCODE_KEYS = ['codigo', 'barcode', 'cod', 'sku', 'codigo de barras'];
+const GAIN_KEYS = ['ganancia', 'margen', 'margin', 'gain', 'utilidad', 'profit'];
+
+function isHeaderRow(row: CellValue[]): boolean {
+  // A row is a header if it contains "descripcion" OR "costo"
+  for (const cell of row) {
+    if (cellMatches(cell, NAME_KEYS)) return true;
+    if (cellMatches(cell, COST_KEYS)) return true;
   }
-  return -1;
+  return false;
 }
 
-function parseRows(rows: Sheet): Omit<Product, 'id'>[] {
+function smartParse(rows: Sheet): Omit<Product, 'id'>[] {
   if (rows.length === 0) return [];
 
-  const headerIdx = findHeaderRowIndex(rows);
-  const headerRow = headerIdx >= 0 ? rows[headerIdx] : rows[0];
-  const startIdx = headerIdx >= 0 ? headerIdx + 1 : 1;
+  // Step 1: Scan ALL rows to find the header row
+  let headerIdx = -1;
+  for (let i = 0; i < rows.length; i++) {
+    if (isHeaderRow(rows[i])) {
+      headerIdx = i;
+      break;
+    }
+  }
 
-  const nameCol = findColIndex(headerRow, KEYWORDS.name);
-  const costCol = findColIndex(headerRow, KEYWORDS.cost);
-  const stockCol = findColIndex(headerRow, KEYWORDS.stock);
-  const barcodeCol = findColIndex(headerRow, KEYWORDS.barcode);
-  const gainCol = findColIndex(headerRow, KEYWORDS.gain);
+  // Fallback: if no header found, assume first row
+  if (headerIdx < 0) {
+    if (rows.length < 2) return [];
+    headerIdx = 0;
+  }
 
+  const headerRow = rows[headerIdx];
+  const startIdx = headerIdx + 1;
+
+  // Step 2: Map columns from the header row
+  const nameCol = findColIndex(headerRow, NAME_KEYS);
+  const costCol = findColIndex(headerRow, COST_KEYS);
+  const stockCol = findColIndex(headerRow, STOCK_KEYS);
+  const barcodeCol = findColIndex(headerRow, BARCODE_KEYS);
+  const gainCol = findColIndex(headerRow, GAIN_KEYS);
+
+  // If we couldn't find a name column, this isn't a valid header
+  if (nameCol < 0 && costCol < 0) return [];
+
+  // Step 3: Extract data rows with fallback to 0 for empty/NaN
   const result: Omit<Product, 'id'>[] = [];
   for (let i = startIdx; i < rows.length; i++) {
     const row = rows[i];
+
+    // Get name — skip rows with no name
     const name = nameCol >= 0 ? String(row[nameCol] ?? '').trim() : '';
     if (!name) continue;
+
+    // Force empty/NaN to 0 for numeric fields
+    const stock = stockCol >= 0 ? safeNum(row[stockCol]) : 0;
+    const priceBuy = costCol >= 0 ? safeNum(row[costCol]) : 0;
+    const gainPct = gainCol >= 0 ? safeNum(row[gainCol]) : 30;
 
     result.push({
       barcode: barcodeCol >= 0 ? String(row[barcodeCol] ?? '').trim() : '',
       name,
-      stock: stockCol >= 0 ? safeNum(row[stockCol]) : 0,
-      priceBuy: costCol >= 0 ? safeNum(row[costCol]) : 0,
-      gainPct: gainCol >= 0 ? safeNum(row[gainCol]) : 30,
+      stock,
+      priceBuy,
+      gainPct: gainPct > 0 ? gainPct : 30,
     });
   }
   return result;
@@ -177,7 +216,7 @@ export default function Inventario() {
         return;
       }
 
-      const parsed = parseRows(rows as unknown as Sheet);
+      const parsed = smartParse(rows as unknown as Sheet);
       if (parsed.length === 0) {
         setImportStatus('error');
         return;
