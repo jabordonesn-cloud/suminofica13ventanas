@@ -48,6 +48,7 @@ export default function Inventario() {
 
   const searchRef = useRef<HTMLInputElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const tableContainerRef = useRef<HTMLDivElement>(null);
 
   const sortedProducts = useMemo(() => {
     const filtered = products.filter((p) => {
@@ -69,6 +70,23 @@ export default function Inventario() {
       return () => clearTimeout(timer);
     }
   }, [importStatus]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!tableContainerRef.current) return;
+      const activeTag = document.activeElement?.tagName;
+      if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT') return;
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        tableContainerRef.current.scrollBy({ left: 60, behavior: 'smooth' });
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        tableContainerRef.current.scrollBy({ left: -60, behavior: 'smooth' });
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const handleQuickAdd = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== 'Enter') return;
@@ -230,19 +248,19 @@ export default function Inventario() {
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Tasa $$</label>               <input                 type="number"                 step="0.01"                 value={tasaPts}                 onChange={(e) => setTasaPts(safeNum(e.target.value, tasaPts))}                 className="w-28 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent"               />             </div>           </div>            <div className="flex-1" />            <button             onClick={() => fileInputRef.current?.click()}             disabled={importStatus === 'loading'}             className="flex items-center gap-2 px-4 py-2 bg-gold-400 hover:bg-gold-500 text-white rounded-lg text-sm font-semibold transition-all shadow-gold-sm whitespace-nowrap disabled:opacity-50"           >             {importStatus === 'loading' ? (               <Loader2 className="w-4 h-4 animate-spin" />             ) : (               <FileSpreadsheet className="w-4 h-4" />             )}             Cargar Inventario (Excel/CSV)           </button>           <input             ref={fileInputRef}             type="file"             accept=".xlsx, .xls, .csv"             onChange={handleFileChange}             className="hidden"           />         </div>          {importStatus === 'done' && (           <div className="mt-3 flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm rounded-lg px-4 py-2.5">             <CheckCircle2 className="w-4 h-4" />             Se importaron <strong>{importCount}</strong> productos correctamente.           </div>         )}         {importStatus === 'error' && (           <div className="mt-3 flex items-center gap-2 bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg px-4 py-2.5">             <AlertTriangle className="w-4 h-4" />             No se pudieron leer los datos. Verifique que el archivo Excel sea el correcto.           </div>         )}          <div className="mt-3 relative">           <ScanLine className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gold-400" />           <input             ref={searchRef}             type="text"             value={search}             onChange={(e) => setSearch(e.target.value)}             onKeyDown={handleQuickAdd}             placeholder="Escanear Código de Barras / Buscar producto..."             className="w-full pl-11 pr-4 py-3 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent"             autoFocus           />         </div>       </div>        <div className="bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden">         <div className="h-1.5 bg-gradient-to-r from-gold-300 via-gold-400 to-gold-500" />         <div className="overflow-x-auto">           <table className="w-full text-sm">             <thead>               <tr className="bg-gold-50 text-gray-600 text-xs uppercase tracking-wider">                 <th className="text-left px-4 py-3 font-semibold">Código de Barras</th>                 <th className="text-left px-4 py-3 font-semibold min-w-[350px]">Nombre del Producto</th>                 <th className="text-center px-4 py-3 font-semibold">Existencia</th>                 <th className="text-right px-4 py-3 font-semibold">Precio Compra</th>                 <th className="text-center px-4 py-3 font-semibold">\% Ganancia</th>                 <th className="text-right px-4 py-3 font-semibold">Precio Venta</th>                 <th className="text-right px-4 py-3 font-semibold text-blue-600">Precio en Bs</th>                 <th className="text-right px-4 py-3 font-semibold text-green-700">Precio en $$</th>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Tasa $$</label>               <input                 type="number"                 step="0.01"                 value={tasaPts}                 onChange={(e) => setTasaPts(safeNum(e.target.value, tasaPts))}                 className="w-28 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent"               />             </div>           </div>            <div className="flex-1" />            <button             onClick={() => fileInputRef.current?.click()}             disabled={importStatus === 'loading'}             className="flex items-center gap-2 px-4 py-2 bg-gold-400 hover:bg-gold-500 text-white rounded-lg text-sm font-semibold transition-all shadow-gold-sm whitespace-nowrap disabled:opacity-50"           >             {importStatus === 'loading' ? (               <Loader2 className="w-4 h-4 animate-spin" />             ) : (               <FileSpreadsheet className="w-4 h-4" />             )}             Cargar Inventario (Excel/CSV)           </button>           <button             onClick={() => setShowAdd(true)}             className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold transition-all shadow-sm whitespace-nowrap"           >             <Plus className="w-4 h-4" />             Agregar Producto           </button>           <input             ref={fileInputRef}             type="file"             accept=".xlsx, .xls, .csv"             onChange={handleFileChange}             className="hidden"           />         </div>          {importStatus === 'done' && (           <div className="mt-3 flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm rounded-lg px-4 py-2.5">             <CheckCircle2 className="w-4 h-4" />             Se importaron <strong>{importCount}</strong> productos correctamente.           </div>         )}         {importStatus === 'error' && (           <div className="mt-3 flex items-center gap-2 bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg px-4 py-2.5">             <AlertTriangle className="w-4 h-4" />             No se pudieron leer los datos. Verifique que el archivo Excel sea el correcto.           </div>         )}          <div className="mt-3 relative">           <ScanLine className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gold-400" />           <input             ref={searchRef}             type="text"             value={search}             onChange={(e) => setSearch(e.target.value)}             onKeyDown={handleQuickAdd}             placeholder="Escanear Código de Barras / Buscar producto..."             className="w-full pl-11 pr-4 py-3 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent"             autoFocus           />           <div className="mt-2 flex items-center gap-2">             <span className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 bg-gray-100 rounded-full px-3 py-1">               <Package className="w-3.5 h-3.5 text-gold-500" />               Total en inventario: <strong className="text-gray-700">{products.length}</strong> productos             </span>           </div>         </div>       </div>        <div className="bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden">         <div className="h-1.5 bg-gradient-to-r from-gold-300 via-gold-400 to-gold-500" />         <div ref={tableContainerRef} className="overflow-x-auto">           <table className="w-full text-sm">             <thead>               <tr className="bg-gold-50 text-gray-600 text-xs uppercase tracking-wider">                 <th className="text-center px-4 py-3 font-semibold w-12">Nº</th>                 <th className="text-left px-4 py-3 font-semibold">Código de Barras</th>                 <th className="text-left px-4 py-3 font-semibold min-w-[350px]">Nombre del Producto</th>                 <th className="text-center px-4 py-3 font-semibold">Existencia</th>                 <th className="text-right px-4 py-3 font-semibold">Precio Compra</th>                 <th className="text-center px-4 py-3 font-semibold">\% Ganancia</th>                 <th className="text-right px-4 py-3 font-semibold">Precio Venta</th>                 <th className="text-right px-4 py-3 font-semibold text-blue-600">Precio en Bs</th>                 <th className="text-right px-4 py-3 font-semibold text-green-700">Precio en $$</th>
                 <th className="text-center px-4 py-3 font-semibold"></th>
               </tr>
             </thead>
             <tbody>
               {sortedProducts.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="text-center py-12 text-gray-400">
+                  <td colSpan={10} className="text-center py-12 text-gray-400">
                     No hay productos. Use el escáner o cargue un archivo Excel/CSV para comenzar.
                   </td>
                 </tr>
               )}
-              {sortedProducts.map((p) => {
+              {sortedProducts.map((p, index) => {
                 const { priceSell, priceBs, pricePts } = calcRow(p);
                 const isLowStock = p.stock <= 5;
 
@@ -251,6 +269,7 @@ export default function Inventario() {
                     key={p.id}
                     className={`border-t border-gray-50 transition-colors ${isLowStock ? 'bg-red-50' : 'hover:bg-gray-50/50'}`}
                   >
+                    <td className="px-4 py-3 text-center text-gray-500 font-medium">{index + 1}</td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
                         {isLowStock && (
