@@ -203,7 +203,7 @@ export default function Inventario() {
     const gain = safeNum(p.gainPct);
     const priceSell = buy + buy * (gain / 100);
     const priceBs = priceSell * safeNum(tasaBs, 1);
-    const pricePts = priceBs * safeNum(tasaPts, 1);
+    const pricePts = priceBs / (safeNum(tasaPts, 1) || 1);
     return { priceSell, priceBs, pricePts };
   };
 
@@ -230,7 +230,7 @@ export default function Inventario() {
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Tasa $$</label>               <input                 type="number"                 step="0.01"                 value={tasaPts}                 onChange={(e) => setTasaPts(safeNum(e.target.value, tasaPts))}                 className="w-28 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent"               />             </div>           </div>            <div className="flex-1" />            <button             onClick={() => fileInputRef.current?.click()}             disabled={importStatus === 'loading'}             className="flex items-center gap-2 px-4 py-2 bg-gold-400 hover:bg-gold-500 text-white rounded-lg text-sm font-semibold transition-all shadow-gold-sm whitespace-nowrap disabled:opacity-50"           >             {importStatus === 'loading' ? (               <Loader2 className="w-4 h-4 animate-spin" />             ) : (               <FileSpreadsheet className="w-4 h-4" />             )}             Cargar Inventario (Excel/CSV)           </button>           <input             ref={fileInputRef}             type="file"             accept=".xlsx, .xls, .csv"             onChange={handleFileChange}             className="hidden"           />         </div>          {importStatus === 'done' && (           <div className="mt-3 flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm rounded-lg px-4 py-2.5">             <CheckCircle2 className="w-4 h-4" />             Se importaron <strong>{importCount}</strong> productos correctamente.           </div>         )}         {importStatus === 'error' && (           <div className="mt-3 flex items-center gap-2 bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg px-4 py-2.5">             <AlertTriangle className="w-4 h-4" />             No se pudieron leer los datos. Verifique que el archivo Excel sea el correcto.           </div>         )}          <div className="mt-3 relative">           <ScanLine className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gold-400" />           <input             ref={searchRef}             type="text"             value={search}             onChange={(e) => setSearch(e.target.value)}             onKeyDown={handleQuickAdd}             placeholder="Escanear Código de Barras / Buscar producto..."             className="w-full pl-11 pr-4 py-3 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent"             autoFocus           />         </div>       </div>        <div className="bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden">         <div className="h-1.5 bg-gradient-to-r from-gold-300 via-gold-400 to-gold-500" />         <div className="overflow-x-auto">           <table className="w-full text-sm">             <thead>               <tr className="bg-gold-50 text-gray-600 text-xs uppercase tracking-wider">                 <th className="text-left px-4 py-3 font-semibold">Código de Barras</th>                 <th className="text-left px-4 py-3 font-semibold">Nombre del Producto</th>                 <th className="text-center px-4 py-3 font-semibold">Existencia</th>                 <th className="text-right px-4 py-3 font-semibold">Precio Compra</th>                 <th className="text-center px-4 py-3 font-semibold">\% Ganancia</th>                 <th className="text-right px-4 py-3 font-semibold">Precio Venta</th>                 <th className="text-right px-4 py-3 font-semibold text-blue-600">Precio en Bs</th>                 <th className="text-right px-4 py-3 font-semibold text-green-700">Precio en $$</th>
+              <label className="block text-xs font-medium text-gray-500 mb-1">Tasa $$</label>               <input                 type="number"                 step="0.01"                 value={tasaPts}                 onChange={(e) => setTasaPts(safeNum(e.target.value, tasaPts))}                 className="w-28 px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent"               />             </div>           </div>            <div className="flex-1" />            <button             onClick={() => fileInputRef.current?.click()}             disabled={importStatus === 'loading'}             className="flex items-center gap-2 px-4 py-2 bg-gold-400 hover:bg-gold-500 text-white rounded-lg text-sm font-semibold transition-all shadow-gold-sm whitespace-nowrap disabled:opacity-50"           >             {importStatus === 'loading' ? (               <Loader2 className="w-4 h-4 animate-spin" />             ) : (               <FileSpreadsheet className="w-4 h-4" />             )}             Cargar Inventario (Excel/CSV)           </button>           <input             ref={fileInputRef}             type="file"             accept=".xlsx, .xls, .csv"             onChange={handleFileChange}             className="hidden"           />         </div>          {importStatus === 'done' && (           <div className="mt-3 flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm rounded-lg px-4 py-2.5">             <CheckCircle2 className="w-4 h-4" />             Se importaron <strong>{importCount}</strong> productos correctamente.           </div>         )}         {importStatus === 'error' && (           <div className="mt-3 flex items-center gap-2 bg-red-50 border border-red-200 text-red-600 text-sm rounded-lg px-4 py-2.5">             <AlertTriangle className="w-4 h-4" />             No se pudieron leer los datos. Verifique que el archivo Excel sea el correcto.           </div>         )}          <div className="mt-3 relative">           <ScanLine className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gold-400" />           <input             ref={searchRef}             type="text"             value={search}             onChange={(e) => setSearch(e.target.value)}             onKeyDown={handleQuickAdd}             placeholder="Escanear Código de Barras / Buscar producto..."             className="w-full pl-11 pr-4 py-3 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-transparent"             autoFocus           />         </div>       </div>        <div className="bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden">         <div className="h-1.5 bg-gradient-to-r from-gold-300 via-gold-400 to-gold-500" />         <div className="overflow-x-auto">           <table className="w-full text-sm">             <thead>               <tr className="bg-gold-50 text-gray-600 text-xs uppercase tracking-wider">                 <th className="text-left px-4 py-3 font-semibold">Código de Barras</th>                 <th className="text-left px-4 py-3 font-semibold min-w-[350px]">Nombre del Producto</th>                 <th className="text-center px-4 py-3 font-semibold">Existencia</th>                 <th className="text-right px-4 py-3 font-semibold">Precio Compra</th>                 <th className="text-center px-4 py-3 font-semibold">\% Ganancia</th>                 <th className="text-right px-4 py-3 font-semibold">Precio Venta</th>                 <th className="text-right px-4 py-3 font-semibold text-blue-600">Precio en Bs</th>                 <th className="text-right px-4 py-3 font-semibold text-green-700">Precio en $$</th>
                 <th className="text-center px-4 py-3 font-semibold"></th>
               </tr>
             </thead>
@@ -260,7 +260,7 @@ export default function Inventario() {
                           type="text"
                           value={p.barcode}
                           onChange={(e) => updateProduct(p.id, { barcode: e.target.value })}
-                          className="w-32 font-mono text-xs px-1 py-1 border border-transparent rounded hover:border-gray-200 focus:outline-none focus:ring-1 focus:ring-gold-400 focus:border-transparent bg-transparent"
+                          className="w-32 font-mono text-xs px-2 py-1 border border-gray-200 rounded bg-gray-50 hover:bg-gold-50 focus:outline-none focus:ring-1 focus:ring-gold-400 focus:border-transparent transition-colors"
                         />
                       </div>
                     </td>
@@ -269,7 +269,7 @@ export default function Inventario() {
                         type="text"
                         value={p.name}
                         onChange={(e) => updateProduct(p.id, { name: e.target.value })}
-                        className="w-full font-medium text-gray-700 px-1 py-1 border border-transparent rounded hover:border-gray-200 focus:outline-none focus:ring-1 focus:ring-gold-400 focus:border-transparent bg-transparent"
+                        className="w-full min-w-[330px] font-medium text-gray-700 px-2 py-1 border border-gray-200 rounded bg-gray-50 hover:bg-gold-50 focus:outline-none focus:ring-1 focus:ring-gold-400 focus:border-transparent transition-colors"
                       />
                     </td>
                     <td className="px-4 py-3 text-center">
@@ -277,10 +277,10 @@ export default function Inventario() {
                         type="number"
                         value={p.stock}
                         onChange={(e) => updateProduct(p.id, { stock: safeNum(e.target.value) })}
-                        className={`w-16 text-center px-1 py-1 border rounded text-sm focus:outline-none focus:ring-1 focus:ring-gold-400
+                        className={`w-16 text-center px-2 py-1 border rounded text-sm focus:outline-none focus:ring-1 focus:ring-gold-400 transition-colors
                           ${isLowStock
                             ? 'border-red-300 text-red-600 font-bold bg-red-50'
-                            : 'border-transparent hover:border-gray-200 text-gray-700'}`}
+                            : 'border-gray-200 bg-gray-50 hover:bg-gold-50 text-gray-700'}`}
                       />
                     </td>
                     <td className="px-4 py-3 text-right">
@@ -289,7 +289,7 @@ export default function Inventario() {
                         step="0.01"
                         value={p.priceBuy}
                         onChange={(e) => updateProduct(p.id, { priceBuy: safeNum(e.target.value) })}
-                        className="w-20 text-right px-2 py-1 border border-transparent rounded text-sm hover:border-gray-200 focus:outline-none focus:ring-1 focus:ring-gold-400 focus:border-transparent bg-transparent"
+                        className="w-20 text-right px-2 py-1 border border-gray-200 rounded text-sm bg-gray-50 hover:bg-gold-50 focus:outline-none focus:ring-1 focus:ring-gold-400 focus:border-transparent transition-colors"
                       />
                     </td>
                     <td className="px-4 py-3 text-center">
@@ -298,7 +298,7 @@ export default function Inventario() {
                         step="0.01"
                         value={p.gainPct}
                         onChange={(e) => updateProduct(p.id, { gainPct: safeNum(e.target.value) })}
-                        className="w-16 text-center px-1 py-1 border border-transparent rounded text-sm hover:border-gray-200 focus:outline-none focus:ring-1 focus:ring-gold-400 focus:border-transparent bg-transparent"
+                        className="w-16 text-center px-2 py-1 border border-gray-200 rounded text-sm bg-gray-50 hover:bg-gold-50 focus:outline-none focus:ring-1 focus:ring-gold-400 focus:border-transparent transition-colors"
                       />
                     </td>
                     <td className="px-4 py-3 text-right font-semibold text-gray-800">
