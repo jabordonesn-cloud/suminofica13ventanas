@@ -13,4 +13,4 @@ export interface CartItem {
   bultoPrice: number | null;
 }
 
-export type PaymentMethod = 'divisas' | 'efectivo' | 'punto' | 'movil' | 'deudores';
+export type PaymentMethod = 'divisas' | 'efectivo' | 'punto' | 'movil' | 'combinado' | 'deudores';
