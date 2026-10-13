@@ -13,22 +13,34 @@ import {
   Check,
   Layers,
   AlertCircle,
+  AlertTriangle,
 } from 'lucide-react';
 import { useStore } from '@/context/StoreContext';
-import type { CartItem, PaymentMethod } from '@/types/product';
+import type { CartItem, PaymentMethod, Product } from '@/types/product';
 
-function safeNum(v: string | number, fallback = 0): number {
+function safeNum(v: string | number | undefined, fallback = 0): number {
+  if (v === undefined) return fallback;
   const n = typeof v === 'number' ? v : parseFloat(v);
   return isNaN(n) ? fallback : n;
 }
 
-function priceSell(p: { priceBuy: number; gainPct: number }): number {
+function priceSell(p: Product): number {
   const buy = safeNum(p.priceBuy);
   const gain = safeNum(p.gainPct);
   return buy + buy * (gain / 100);
 }
 
-const BULTO_DISCOUNT = 0.15;
+function getUnitPrice(item: CartItem): number {
+  if (item.isBulto) {
+    return safeNum(item.product.precioBulto) > 0 ? safeNum(item.product.precioBulto) : priceSell(item.product);
+  }
+  if (!item.isBulto && item.quantity >= 6 && safeNum(item.product.precioMayor) > 0) {
+    return safeNum(item.product.precioMayor);
+  }
+  return priceSell(item.product);
+}
+
+const MAYOR_THRESHOLD = 6;
 
 export default function Ventas() {
   const { products, tasaBs, tasaPts, reduceStock } = useStore();
@@ -42,15 +54,18 @@ export default function Ventas() {
   const [refNumber, setRefNumber] = useState('');
   const [saleComplete, setSaleComplete] = useState(false);
 
-  // Pago Combinado
   const [combinedUsd, setCombinedUsd] = useState('');
   const [combinedBs, setCombinedBs] = useState('');
 
-  // Deudores
   const [deudorName, setDeudorName] = useState('');
   const [showDeudorModal, setShowDeudorModal] = useState(false);
 
   const scannerRef = useRef<HTMLInputElement>(null);
+
+  const getProductStock = (id: string): number => {
+    const p = products.find((pr) => pr.id === id);
+    return p ? p.stock : 0;
+  };
 
   const handleScanner = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== 'Enter') return;
@@ -62,12 +77,12 @@ export default function Ventas() {
     );
     if (found) {
       const existing = cart.find((c) => c.product.id === found.id);
-      if (existing) {
+      if (existing && !existing.isBulto) {
         setCart(cart.map((c) =>
           c.product.id === found.id ? { ...c, quantity: c.quantity + 1 } : c,
         ));
       } else {
-        setCart([...cart, { product: found, quantity: 1, bultoPrice: null }]);
+        setCart([...cart, { product: found, quantity: 1, isBulto: false }]);
       }
     }
     setScanner('');
@@ -86,10 +101,13 @@ export default function Ventas() {
     setCart(cart.filter((c) => c.product.id !== id));
   };
 
+  const hasStockIssues = useMemo(() => {
+    return cart.some((item) => item.quantity > getProductStock(item.product.id));
+  }, [cart, products]);
+
   const totals = useMemo(() => {
     const totalUsd = cart.reduce((sum, item) => {
-      const unit = item.bultoPrice !== null ? safeNum(item.bultoPrice) : priceSell(item.product);
-      return sum + unit * item.quantity;
+      return sum + getUnitPrice(item) * item.quantity;
     }, 0);
     const totalBs = totalUsd * safeNum(tasaBs, 1);
     const totalPts = totalBs / (safeNum(tasaPts, 1) || 1);
@@ -103,30 +121,21 @@ export default function Ventas() {
       const bsInUsd = safeNum(tasaBs, 1) > 0 ? bsPaid / safeNum(tasaBs, 1) : 0;
       const totalPaidUsd = usdPaid + bsInUsd;
       const diff = totalPaidUsd - totals.totalUsd;
-      return {
-        diffUsd: diff,
-        diffBs: diff * safeNum(tasaBs, 1),
-        isShort: diff < 0,
-      };
+      return { diffUsd: diff, diffBs: diff * safeNum(tasaBs, 1), isShort: diff < 0 };
     }
     const paid = safeNum(amountPaid);
     const diff = paid - totals.totalUsd;
-    return {
-      diffUsd: diff,
-      diffBs: diff * safeNum(tasaBs, 1),
-      isShort: diff < 0,
-    };
+    return { diffUsd: diff, diffBs: diff * safeNum(tasaBs, 1), isShort: diff < 0 };
   }, [paymentMethod, amountPaid, combinedUsd, combinedBs, totals.totalUsd, tasaBs]);
 
   const canProcess = useMemo(() => {
     if (cart.length === 0) return false;
+    if (hasStockIssues) return false;
     if (paymentMethod === 'movil' && !refNumber.trim()) return false;
-    if (paymentMethod === 'combinado') {
-      return !change.isShort;
-    }
+    if (paymentMethod === 'combinado') return !change.isShort;
     if (paymentMethod !== 'deudores' && safeNum(amountPaid) < totals.totalUsd) return false;
     return true;
-  }, [cart, paymentMethod, refNumber, amountPaid, totals.totalUsd, change.isShort]);
+  }, [cart, hasStockIssues, paymentMethod, refNumber, amountPaid, totals.totalUsd, change.isShort]);
 
   const resetSale = () => {
     setCart([]);
@@ -142,18 +151,14 @@ export default function Ventas() {
 
   const handleProcessSale = () => {
     if (!canProcess) return;
-    cart.forEach((item) => {
-      reduceStock(item.product.id, item.quantity);
-    });
+    cart.forEach((item) => reduceStock(item.product.id, item.quantity));
     setSaleComplete(true);
     setTimeout(resetSale, 2500);
   };
 
   const handleSendToDeudores = () => {
-    if (!deudorName.trim() || cart.length === 0) return;
-    cart.forEach((item) => {
-      reduceStock(item.product.id, item.quantity);
-    });
+    if (!deudorName.trim() || cart.length === 0 || hasStockIssues) return;
+    cart.forEach((item) => reduceStock(item.product.id, item.quantity));
     setShowDeudorModal(false);
     setSaleComplete(true);
     setTimeout(resetSale, 2500);
@@ -161,11 +166,9 @@ export default function Ventas() {
 
   const handleBultoApply = () => {
     if (bultoItem) {
-      const basePrice = priceSell(bultoItem.product);
-      const bultoPrice = basePrice * (1 - BULTO_DISCOUNT);
       setCart(cart.map((c) =>
         c.product.id === bultoItem.product.id
-          ? { ...c, bultoPrice: bultoPrice }
+          ? { ...c, isBulto: true, quantity: 1 }
           : c,
       ));
     }
@@ -174,22 +177,21 @@ export default function Ventas() {
 
   const handleBultoRemove = (id: string) => {
     setCart(cart.map((c) =>
-      c.product.id === id ? { ...c, bultoPrice: null } : c,
+      c.product.id === id ? { ...c, isBulto: false } : c,
     ));
   };
 
   const paymentOptions: { value: PaymentMethod; label: string; icon: typeof CreditCard }[] = [
     { value: 'divisas', label: 'Divisas', icon: DollarSign },
     { value: 'efectivo', label: 'Efectivo', icon: Banknote },
-    { value: 'punto', label: 'Punto de Venta', icon: CreditCard },
+    { value: 'punto', label: 'Punto', icon: CreditCard },
     { value: 'movil', label: 'Pago Móvil', icon: Smartphone },
-    { value: 'combinado', label: 'Pago Combinado', icon: Layers },
+    { value: 'combinado', label: 'Combinado', icon: Layers },
     { value: 'deudores', label: 'Deudores', icon: UsersIcon },
   ];
 
   return (
     <div className="p-4 lg:p-6 max-w-7xl mx-auto">
-      {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-sm text-gray-400 mb-4">
         <ShoppingCart className="w-4 h-4 text-gold-500" />
         <span className="text-gold-500 font-medium">Módulo 2</span>
@@ -197,7 +199,6 @@ export default function Ventas() {
         <span className="text-gray-600">Punto de Venta</span>
       </div>
 
-      {/* Giant scanner */}
       <div className="bg-white border border-gray-100 rounded-xl shadow-sm p-4 mb-4">
         <div className="relative">
           <ScanLine className="absolute left-4 top-1/2 -translate-y-1/2 w-6 h-6 text-gold-400" />
@@ -216,7 +217,7 @@ export default function Ventas() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* Cart table - spans 2 columns */}
+        {/* Cart */}
         <div className="lg:col-span-2 bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden">
           <div className="h-1.5 bg-gradient-to-r from-gold-300 via-gold-400 to-gold-500" />
           <div className="p-4 border-b border-gray-50 flex items-center justify-between">
@@ -244,30 +245,46 @@ export default function Ventas() {
                   </tr>
                 )}
                 {cart.map((item) => {
-                  const unit = item.bultoPrice !== null ? safeNum(item.bultoPrice) : priceSell(item.product);
+                  const unit = getUnitPrice(item);
+                  const unitBs = unit * safeNum(tasaBs, 1);
                   const subtotal = unit * item.quantity;
+                  const currentStock = getProductStock(item.product.id);
+                  const isOverStock = item.quantity > currentStock;
+                  const isMayor = !item.isBulto && item.quantity >= MAYOR_THRESHOLD && safeNum(item.product.precioMayor) > 0;
+
                   return (
-                    <tr key={item.product.id} className="border-t border-gray-50 hover:bg-gray-50/30">
+                    <tr key={item.product.id} className={`border-t border-gray-50 ${isOverStock ? 'bg-red-50/30' : 'hover:bg-gray-50/30'}`}>
                       <td
                         className="px-4 py-3 font-medium text-gray-700 cursor-pointer select-none"
                         onDoubleClick={() => {
-                          if (item.bultoPrice === null) {
-                            setBultoItem(item);
-                          } else {
+                          if (item.isBulto) {
                             handleBultoRemove(item.product.id);
+                          } else {
+                            setBultoItem(item);
                           }
                         }}
-                        title={item.bultoPrice === null ? 'Doble clic para precio de bulto' : 'Doble clic para quitar bulto'}
+                        title={item.isBulto ? 'Doble clic para quitar bulto' : 'Doble clic para facturar bulto'}
                       >
                         {item.product.name}
-                        {item.bultoPrice !== null && (
-                          <span className="ml-2 text-xs bg-gold-100 text-gold-600 px-1.5 py-0.5 rounded-full font-semibold">
+                        {item.isBulto && (
+                          <span className="ml-2 text-xs bg-gold-100 text-gold-700 px-1.5 py-0.5 rounded-full font-semibold">
                             (Bulto)
                           </span>
                         )}
+                        {!item.isBulto && isMayor && (
+                          <span className="ml-2 text-xs bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded-full font-semibold">
+                            (Mayor)
+                          </span>
+                        )}
+                        <span className="block text-xs text-gray-400 mt-0.5">
+                          Stock: {currentStock} und.
+                        </span>
                       </td>
                       <td className="px-4 py-3 text-center text-gray-600">
-                        ${unit.toFixed(2)}
+                        <div className="font-semibold">${unit.toFixed(2)}</div>
+                        <div className="text-xs text-gray-400">
+                          Bs {unitBs.toLocaleString('es-VE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-center">
                         <input
@@ -275,8 +292,18 @@ export default function Ventas() {
                           min="1"
                           value={item.quantity}
                           onChange={(e) => updateQty(item.product.id, safeNum(e.target.value, 1))}
-                          className="w-16 text-center px-2 py-1.5 border border-gray-200 rounded text-sm bg-gray-50 hover:bg-gold-50 focus:outline-none focus:ring-1 focus:ring-gold-400 transition-colors"
+                          className={`w-20 text-center px-2 py-1.5 border rounded text-sm font-medium transition-colors
+                            ${isOverStock
+                              ? 'text-red-600 font-bold border-red-500 bg-red-50'
+                              : 'border-gray-200 bg-gray-50 hover:bg-gold-50 text-gray-700 focus:outline-none focus:ring-1 focus:ring-gold-400'
+                            }`}
                         />
+                        {isOverStock && (
+                          <div className="flex items-center justify-center gap-1 mt-1 text-red-500">
+                            <AlertTriangle className="w-3 h-3" />
+                            <span className="text-xs font-medium">Supera stock</span>
+                          </div>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right font-semibold text-gray-800">
                         ${subtotal.toFixed(2)}
@@ -297,7 +324,7 @@ export default function Ventas() {
           </div>
         </div>
 
-        {/* Right panel: totals + payment */}
+        {/* Right panel */}
         <div className="space-y-4">
           {/* Totals */}
           <div className="bg-white border border-gray-100 rounded-xl shadow-sm overflow-hidden">
@@ -331,7 +358,6 @@ export default function Ventas() {
             <div className="p-4">
               <h2 className="text-sm font-semibold text-gray-700 mb-3">Método de Pago</h2>
 
-              {/* Payment method selector */}
               <div className="grid grid-cols-2 gap-2 mb-4">
                 {paymentOptions.map((opt) => {
                   const Icon = opt.icon;
@@ -359,7 +385,6 @@ export default function Ventas() {
                 })}
               </div>
 
-              {/* Pago Móvil reference */}
               {paymentMethod === 'movil' && (
                 <div className="mb-3">
                   <label className="block text-xs font-medium text-gray-500 mb-1">
@@ -375,12 +400,11 @@ export default function Ventas() {
                 </div>
               )}
 
-              {/* Pago Combinado */}
               {paymentMethod === 'combinado' && (
                 <div className="space-y-3 mb-3">
                   <div>
                     <label className="block text-xs font-medium text-gray-500 mb-1">
-                      Entregado en Divisas ($)
+                      ¿Entregó en Divisas ($)?
                     </label>
                     <input
                       type="number"
@@ -393,7 +417,7 @@ export default function Ventas() {
                   </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-500 mb-1">
-                      Entregado en Efectivo (Bs)
+                      ¿Entregó en Efectivo Bs?
                     </label>
                     <input
                       type="number"
@@ -420,7 +444,6 @@ export default function Ventas() {
                 </div>
               )}
 
-              {/* Standard amount paid (not for deudores or combinado) */}
               {paymentMethod !== 'deudores' && paymentMethod !== 'combinado' && (
                 <>
                   <div className="mb-3">
@@ -454,7 +477,6 @@ export default function Ventas() {
                 </>
               )}
 
-              {/* Deudores info */}
               {paymentMethod === 'deudores' && (
                 <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 mb-3 text-xs text-amber-700 flex items-start gap-2">
                   <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
@@ -462,15 +484,21 @@ export default function Ventas() {
                 </div>
               )}
 
+              {/* Stock warning */}
+              {hasStockIssues && paymentMethod !== 'deudores' && (
+                <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2.5 mb-3 text-xs text-red-600 flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                  <span>No se puede confirmar: hay productos que superan el stock disponible.</span>
+                </div>
+              )}
+
               {/* Action buttons */}
               {paymentMethod === 'deudores' ? (
                 <button
-                  onClick={() => {
-                    if (cart.length > 0) setShowDeudorModal(true);
-                  }}
-                  disabled={cart.length === 0}
+                  onClick={() => { if (cart.length > 0 && !hasStockIssues) setShowDeudorModal(true); }}
+                  disabled={cart.length === 0 || hasStockIssues}
                   className={`w-full flex items-center justify-center gap-2 font-semibold py-3.5 rounded-lg transition-all text-base
-                    ${cart.length > 0
+                    ${cart.length > 0 && !hasStockIssues
                       ? 'bg-orange-500 hover:bg-orange-600 text-white shadow-sm'
                       : 'bg-gray-200 text-gray-400 cursor-not-allowed'
                     }`}
@@ -511,17 +539,21 @@ export default function Ventas() {
               <div className="inline-flex items-center justify-center w-14 h-14 bg-gold-50 rounded-full mb-4">
                 <Layers className="w-7 h-7 text-gold-500" />
               </div>
-              <h2 className="text-lg font-semibold text-gray-800 mb-1">¿Aplicar precio de Bulto?</h2>
-              <p className="text-sm text-gray-500 mb-2">{bultoItem.product.name}</p>
-              <div className="bg-gold-50 rounded-lg px-4 py-3 mb-6">
-                <p className="text-xs text-gray-500 mb-1">Precio con 15% de descuento</p>
-                <p className="text-2xl font-bold text-gold-600">
-                  ${(priceSell(bultoItem.product) * (1 - BULTO_DISCOUNT)).toFixed(2)}
-                </p>
-                <p className="text-xs text-gray-400 mt-1">
-                  Precio normal: ${priceSell(bultoItem.product).toFixed(2)}
-                </p>
-              </div>
+              <h2 className="text-lg font-semibold text-gray-800 mb-1">¿Desea facturar un Bulto?</h2>
+              <p className="text-sm text-gray-500 mb-4">{bultoItem.product.name}</p>
+              {safeNum(bultoItem.product.precioBulto) > 0 ? (
+                <div className="bg-gold-50 rounded-lg px-4 py-3 mb-6">
+                  <p className="text-xs text-gray-500 mb-1">Precio por bulto</p>
+                  <p className="text-2xl font-bold text-gold-600">
+                    ${safeNum(bultoItem.product.precioBulto).toFixed(2)}
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Precio normal: ${priceSell(bultoItem.product).toFixed(2)}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-gray-400 mb-6">Este producto no tiene precio de bulto configurado.</p>
+              )}
               <div className="flex gap-3">
                 <button
                   onClick={() => setBultoItem(null)}
@@ -531,7 +563,12 @@ export default function Ventas() {
                 </button>
                 <button
                   onClick={handleBultoApply}
-                  className="flex-1 py-2.5 bg-gold-400 hover:bg-gold-500 text-white font-semibold rounded-lg transition-colors"
+                  disabled={safeNum(bultoItem.product.precioBulto) <= 0}
+                  className={`flex-1 py-2.5 font-semibold rounded-lg transition-colors
+                    ${safeNum(bultoItem.product.precioBulto) > 0
+                      ? 'bg-gold-400 hover:bg-gold-500 text-white'
+                      : 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    }`}
                 >
                   SÍ
                 </button>
@@ -594,7 +631,7 @@ export default function Ventas() {
         </div>
       )}
 
-      {/* Sale complete confirmation */}
+      {/* Sale complete */}
       {saleComplete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="bg-white rounded-2xl shadow-2xl p-8 w-full max-w-sm text-center">

@@ -19,12 +19,12 @@ interface StoreContextValue {
 const StoreContext = createContext<StoreContextValue | undefined>(undefined);
 
 const seedProducts: Product[] = [
-  { id: 'p1', barcode: '7591234567890', name: 'Cuaderno Universitario', stock: 24, priceBuy: 1.5, gainPct: 40 },
-  { id: 'p2', barcode: '7591234567891', name: 'Lápiz HB #2', stock: 3, priceBuy: 0.25, gainPct: 60 },
-  { id: 'p3', barcode: '7591234567892', name: 'Caja de Lápices de Colores', stock: 15, priceBuy: 3.0, gainPct: 35 },
-  { id: 'p4', barcode: '7591234567893', name: 'Resma de Papel A4', stock: 2, priceBuy: 5.0, gainPct: 30 },
-  { id: 'p5', barcode: '7591234567894', name: 'Borrador de Lápiz', stock: 50, priceBuy: 0.15, gainPct: 50 },
-  { id: 'p6', barcode: '7591234567895', name: 'Tijera Escolar', stock: 8, priceBuy: 1.2, gainPct: 45 },
+  { id: 'p1', barcode: '7591234567890', name: 'Cuaderno Universitario', stock: 24, priceBuy: 1.5, gainPct: 40, precioMayor: 1.8, precioBulto: 15.0 },
+  { id: 'p2', barcode: '7591234567891', name: 'Lápiz HB #2', stock: 3, priceBuy: 0.25, gainPct: 60, precioMayor: 0.3, precioBulto: 2.0 },
+  { id: 'p3', barcode: '7591234567892', name: 'Caja de Lápices de Colores', stock: 15, priceBuy: 3.0, gainPct: 35, precioMayor: 3.5, precioBulto: 30.0 },
+  { id: 'p4', barcode: '7591234567893', name: 'Resma de Papel A4', stock: 2, priceBuy: 5.0, gainPct: 30, precioMayor: 5.8, precioBulto: 50.0 },
+  { id: 'p5', barcode: '7591234567894', name: 'Borrador de Lápiz', stock: 50, priceBuy: 0.15, gainPct: 50, precioMayor: 0.18, precioBulto: 1.2 },
+  { id: 'p6', barcode: '7591234567895', name: 'Tijera Escolar', stock: 8, priceBuy: 1.2, gainPct: 45, precioMayor: 1.4, precioBulto: 12.0 },
 ];
 
 function loadProducts(): Product[] {

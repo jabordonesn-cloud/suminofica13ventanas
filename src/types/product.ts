@@ -5,12 +5,14 @@ export interface Product {
   stock: number;
   priceBuy: number;
   gainPct: number;
+  precioMayor?: number;
+  precioBulto?: number;
 }
 
 export interface CartItem {
   product: Product;
   quantity: number;
-  bultoPrice: number | null;
+  isBulto: boolean;
 }
 
 export type PaymentMethod = 'divisas' | 'efectivo' | 'punto' | 'movil' | 'combinado' | 'deudores';
